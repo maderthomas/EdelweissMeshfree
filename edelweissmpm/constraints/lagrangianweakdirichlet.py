@@ -43,7 +43,7 @@ class LagrangianWeakDirichlet(MPMConstraintBase):
 
         self._nLagrangianMultipliers = len(self._prescribedStepDelta)
         self.reactionForce = np.zeros(self._fieldSize)
-        self._lagrangianMultipliers = []
+        #self._lagrangianMultipliers = []
 
     @property
     def name(self) -> str:
@@ -71,13 +71,11 @@ class LagrangianWeakDirichlet(MPMConstraintBase):
         self,
     ) -> list:
         return self._lagrangianMultipliers
-        #return []
+    #return []
 
     def getNumberOfAdditionalNeededScalarVariables(
         self,
     ) -> int:
-        return self._nLagrangianMultipliers
-
     def assignAdditionalScalarVariables(self, scalarVariables: list[ScalarVariable]):
         self._lagrangianMultipliers = scalarVariables
         #pass
