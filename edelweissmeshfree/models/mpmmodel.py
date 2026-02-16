@@ -218,6 +218,15 @@ class MPMModel(FEModel):
         for mp in self.materialPoints.values():
             mp.acceptStateAndPosition()
 
+        # Sync global particle dict with the active set in domains
+        # This removes dead particles from the model's main tracking
+        active_particle_ids = set()
+        for domain in self.particleKernelDomains.values():
+            active_particle_ids.update(p.number for p in domain.particles)
+        
+        # Only keep particles that still exist in at least one domain
+        self.particles = {n: p for n, p in self.particles.items() if n in active_particle_ids}
+
         for p in self.particles.values():
             p.acceptStateAndPosition()
 

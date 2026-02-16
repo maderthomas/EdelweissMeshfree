@@ -158,6 +158,8 @@ class MPMDofManager(DofManager):
         dict
             A dictionary containing the location mapping.
         """
+        if not cells:
+            return {}
 
         idcsOfCellsInDofVector = {}
 
@@ -193,7 +195,8 @@ class MPMDofManager(DofManager):
         dict
             A dictionary containing the location mapping.
         """
-
+        if not particles:
+            return {}
         return self._locateNodeCouplingEntitiesInDofVector(particles)
 
     # def _initializeCSRPattern(self, ):
