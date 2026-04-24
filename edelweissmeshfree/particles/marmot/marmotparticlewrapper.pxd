@@ -75,6 +75,20 @@ cdef extern from "Marmot/MarmotParticleLibrary.h" namespace "MarmotLibrary" nogi
                                const double* materialProperties,
                                int sizeMaterialProperties,
                                const MarmotMeshfreeApproximation& approximation) except +ValueError
+        @staticmethod
+        MarmotParticle* createParticle(const string& particleName,
+                               int particleNumber,
+                               const double* particleCoordinates,
+                               int sizeParticleCoordinates,
+                               double volume,
+                               # MarmotMaterialPoint& mp,
+                               const string& materialName,
+                               const double* materialProperties,
+                               int sizeMaterialProperties,
+                               const MarmotMeshfreeApproximation& approximationU,
+                               const MarmotMeshfreeApproximation& approximationPJ) except +ValueError
+
+
 
 cdef extern from "Marmot/MarmotParticle.h" namespace "Marmot::Meshfree":
     cdef cppclass MarmotParticle nogil:
@@ -94,6 +108,9 @@ cdef extern from "Marmot/MarmotParticle.h" namespace "Marmot::Meshfree":
         string getParticleShape()
 
         void assignMeshfreeKernelFunctions (const vector[const MarmotMeshfreeKernelFunction*]& meshfreeKernelFunctions) except +
+
+        void assignMeshfreeKernelFunctions (const vector[const MarmotMeshfreeKernelFunction*]& meshfreeKernelFunctionsU,
+                                            const vector[const MarmotMeshfreeKernelFunction*]& meshfreeKernelFunctionsPJ) except +
 
         void computePhysicsKernels(   const double* dUc,
                                             double* Pc,

@@ -349,3 +349,196 @@ class KDBinOrganizedParticleManager(BaseParticleManager):
 
         plt.colorbar()
         plt.show()
+
+class KDBinOrganizedMixedParticleManager(BaseParticleManager):
+    """A k-dimensional bin organized manager for mixed formulation particles 
+    (e.g., Displacement + Pressure/Jacobi) and meshfree shape functions.
+
+    Parameters
+    ----------
+    primaryParticleKernelDomain
+        The primary domain of kernel functions (e.g., for the displacement field).
+    secondaryParticleKernelDomain
+        The secondary domain of kernel functions used for mixed formulations 
+        (e.g., lower continuity for pressure/jacobi fields).
+    dimension
+        The dimension of the problem.
+    journal
+        The journal for logging messages.
+    bondParticlesToKernelFunctions
+        Whether to bond the particles to the kernel functions (one particle per kernel function).
+        If True, the kernel functions are moved to the particle center coordinates at each update.
+    randomlyShiftPartliceShapeFunctions
+        Whether to randomly shift the shape functions a bit to avoid alignment artifacts.
+    """
+
+    def __init__(
+        self,
+        primaryParticleKernelDomain: ParticleKernelDomain,
+        secondaryParticleKernelDomain: ParticleKernelDomain,
+        dimension: int,
+        journal: Journal,
+        bondParticlesToKernelFunctions: bool = False,
+        randomlyShiftPartliceShapeFunctions: bool | float = False,
+    ):
+
+        self._primaryKernelFunctions = primaryParticleKernelDomain.meshfreeKernelFunctions
+        self._secondaryKernelFunctions = secondaryParticleKernelDomain.meshfreeKernelFunctions
+        
+        self._particles = primaryParticleKernelDomain.particles
+        self._dimension = dimension
+        self._bondParticlesToKernelFunctions = bondParticlesToKernelFunctions
+        self._journal = journal
+
+        if not isinstance(randomlyShiftPartliceShapeFunctions, (bool, float)):
+            raise ValueError("randomlyShiftPartliceShapeFunctions must be a boolean or a float.")
+        self._randomlyShiftPartliceShapeFunctions = randomlyShiftPartliceShapeFunctions
+
+        if self._bondParticlesToKernelFunctions:
+            if len(self._particles) != len(self._primaryKernelFunctions):
+                raise ValueError("The number of particles and primary kernel functions must be equal.")
+            if len(self._particles) != len(self._secondaryKernelFunctions):
+                raise ValueError("The number of particles and secondary kernel functions must be equal.")
+
+            for i, particle in enumerate(self._particles):
+                particleCoordinates = particle.getCenterCoordinates()
+                self._primaryKernelFunctions[i].moveTo(particleCoordinates)
+                self._secondaryKernelFunctions[i].moveTo(particleCoordinates)
+
+        self.signalizeKernelFunctionUpdate()
+
+    def signalizeKernelFunctionUpdate(self):
+        # Build spatial grids for both primary and secondary kernels
+        self._primaryBins = _FastKDBinOrganizer(self._primaryKernelFunctions, self._dimension)
+        self._secondaryBins = _FastKDBinOrganizer(self._secondaryKernelFunctions, self._dimension)
+
+    def updateConnectivity(self):
+        hasChanged = False
+
+        # --- Bonding Logic ---
+        if self._bondParticlesToKernelFunctions:
+            self._journal.message("Updating mixed kernel function positions...", "ParticleManager")
+            for i, particle in enumerate(self._particles):
+                particleCoordinates = particle.getCenterCoordinates()
+                if self._randomlyShiftPartliceShapeFunctions:
+                    if isinstance(self._randomlyShiftPartliceShapeFunctions, float):
+                        particleVol = particle.getVolumeUndeformed()
+                        particleSize = particleVol ** (1.0 / self._dimension)
+                        randdisp = (
+                            (np.random.rand(self._dimension) - 0.5)
+                            * np.sqrt(particleVol)
+                            * self._randomlyShiftPartliceShapeFunctions
+                            * particleSize
+                        )
+                        particleCoordinates += randdisp
+
+                # Move both primary and secondary kernels to particle coordinate
+                self._primaryKernelFunctions[i].moveTo(particleCoordinates)
+                self._secondaryKernelFunctions[i].moveTo(particleCoordinates)
+
+            # Rebuild grid after moving kernels
+            self.signalizeKernelFunctionUpdate()
+
+        # --- Fast Search Logic ---
+        dim = self._dimension
+        
+        # Primary arrays
+        all_primary_kernels = self._primaryKernelFunctions
+        primary_mins = self._primaryBins._mins  
+        primary_maxs = self._primaryBins._maxs  
+        
+        # Secondary arrays
+        all_secondary_kernels = self._secondaryKernelFunctions
+        secondary_mins = self._secondaryBins._mins
+        secondary_maxs = self._secondaryBins._maxs
+
+        for p in self._particles:
+            evaluationCoordinates = p.getEvaluationCoordinates()
+
+            # Bounding box of the particle
+            p_min = np.min(evaluationCoordinates, axis=0)
+            p_max = np.max(evaluationCoordinates, axis=0)
+
+            # -----------------------------------------------------------------
+            # 1. Find Valid Primary Kernels
+            # -----------------------------------------------------------------
+            primary_candidates = self._primaryBins.getCandidateIndices(p_min, p_max)
+            valid_primary_kernels = []
+
+            for k_idx in primary_candidates:
+                k_min = primary_mins[k_idx]
+                k_max = primary_maxs[k_idx]
+
+                if p_max[0] < k_min[0] or p_min[0] > k_max[0]: continue
+                if dim > 1 and (p_max[1] < k_min[1] or p_min[1] > k_max[1]): continue
+                if dim > 2 and (p_max[2] < k_min[2] or p_min[2] > k_max[2]): continue
+
+                sf = all_primary_kernels[k_idx]
+                for coord in evaluationCoordinates:
+                    if sf.isCoordinateInCurrentSupport(coord):
+                        valid_primary_kernels.append(sf)
+                        break 
+                        
+            valid_primary_kernels.sort(key=lambda x: x.node.label)
+
+            # -----------------------------------------------------------------
+            # 2. Find Valid Secondary Kernels
+            # -----------------------------------------------------------------
+            secondary_candidates = self._secondaryBins.getCandidateIndices(p_min, p_max)
+            valid_secondary_kernels = []
+
+            for k_idx in secondary_candidates:
+                k_min = secondary_mins[k_idx]
+                k_max = secondary_maxs[k_idx]
+
+                if p_max[0] < k_min[0] or p_min[0] > k_max[0]: continue
+                if dim > 1 and (p_max[1] < k_min[1] or p_min[1] > k_max[1]): continue
+                if dim > 2 and (p_max[2] < k_min[2] or p_min[2] > k_max[2]): continue
+                
+                sf_sec = all_secondary_kernels[k_idx]
+                for coord in evaluationCoordinates:
+                    if sf_sec.isCoordinateInCurrentSupport(coord):
+                        valid_secondary_kernels.append(sf_sec)
+                        break
+                        
+            valid_secondary_kernels.sort(key=lambda x: x.node.label)
+            
+            # Check for changes & pass BOTH sets of kernels down to Cython!
+            if not hasChanged and valid_primary_kernels != p.kernelFunctions:
+                hasChanged = True
+            
+            # The particle MUST support the 2-argument assignment
+            p.assignKernelFunctions(valid_primary_kernels, valid_secondary_kernels)
+
+        return hasChanged
+
+    def getCoveredDomain(self):
+        return self._primaryBins._boundingBoxMin, self._primaryBins._boundingBoxMax
+
+    def __str__(self):
+        return f"KDBinOrganizedMixedParticleManager with {len(self._particles)} particles and {len(self._primaryKernelFunctions)} primary shape functions in {self._dimension} dimensions. Covered domain: {self.getCoveredDomain()}."
+
+    def visualize(self):
+        """For 2D only: Visualize the number of primary kernel functions in the bins."""
+        if self._dimension != 2:
+            raise ValueError("Visualization only supported for 2D.")
+
+        import matplotlib.pyplot as plt
+
+        nBins = self._primaryBins._nBins
+        nKernelFunctions = np.zeros(nBins)
+        for i in range(nBins[0]):
+            for j in range(nBins[1]):
+                nKernelFunctions[i, j] = len(self._primaryBins._bins[i * self._primaryBins._strides[1] + j])
+
+        plt.figure()
+        plt.imshow(nKernelFunctions.T)
+        plt.title("Number of primary kernel functions in the bins of the KDBinOrganizer")
+
+        for i in range(nBins[0] + 1):
+            plt.plot([i - 0.5, i - 0.5], [0 - 0.5, nBins[1] - 0.5], "k")
+        for j in range(nBins[1] + 1):
+            plt.plot([0 - 0.5, nBins[0] - 0.5], [j - 0.5, j - 0.5], "k")
+
+        plt.colorbar()
+        plt.show()

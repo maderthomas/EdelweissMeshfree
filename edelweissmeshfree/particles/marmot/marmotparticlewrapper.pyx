@@ -66,9 +66,24 @@ cdef class MarmotParticleWrapper:
                   int particleNumber,
                   double[:,::1] vertexCoordinates,
                   double volume,
-                  MarmotMeshfreeApproximationWrapper marmotMeshfreeApproximationWrapper,
-                  dict material
-                  ):
+                  *args):
+                  #MarmotMeshfreeApproximationWrapper marmotMeshfreeApproximationWrapper,
+                  #dict material
+                  #):
+
+        cdef MarmotMeshfreeApproximationWrapper approximationU
+        cdef MarmotMeshfreeApproximationWrapper approximationPJ = None
+        cdef dict material
+        #unpack args based on how many were passed
+        if len(args) == 2:
+            approximationU = args[0]
+            material = args[1]
+        elif len(args) == 3:
+            approximationU = args[0]
+            approximationPJ = args[1]
+            material = args[2]
+        else:
+            raise TypeError(f"MarmotParticleWrapper expected 6 or 7 arguments, got {4 + len(args)}")
 
 
         ##TODO: This this crap:
@@ -78,16 +93,17 @@ cdef class MarmotParticleWrapper:
 
         self._vertexCoordinates = np.copy(vertexCoordinates)
         self._vertexCoordinatesView = self._vertexCoordinates
-
-
-
-
-
         self._centerCoordinates = np.zeros(vertexCoordinates.shape[1])
         self._centerCoordinatesView = self._centerCoordinates
 
         # self._marmotMaterialPoint = <MarmotMaterialPoint*> self._mp._marmotMaterialPoint
-        self._marmotMeshfreeApproximation = <MarmotMeshfreeApproximation* > marmotMeshfreeApproximationWrapper._marmotMeshfreeApproximation
+        self._marmotMeshfreeApproximation = <MarmotMeshfreeApproximation* > approximationU._marmotMeshfreeApproximation
+        #self._marmotMeshfreeApproximation = <MarmotMeshfreeApproximation* > marmotMeshfreeApproximationWrapper._marmotMeshfreeApproximation
+
+        # Get C++ pointer for PJ approximation (if it exists)
+        cdef MarmotMeshfreeApproximation* _marmotMeshfreeApproximationPJ = NULL
+        if approximationPJ is not None:
+            _marmotMeshfreeApproximationPJ = <MarmotMeshfreeApproximation*> approximationPJ._marmotMeshfreeApproximation
 
         self._assignedKernelFunctions = list()
 
@@ -97,7 +113,9 @@ cdef class MarmotParticleWrapper:
         cdef int nMaterialProperties = len(self.materialProperties)
 
         try:
-            self._marmotParticle = MarmotParticleFactory.createParticle(particleType.encode('utf-8'),
+            if approximationPJ is None:
+                # standard particle (1 approximation)
+                self._marmotParticle = MarmotParticleFactory.createParticle(particleType.encode('utf-8'),
                                                                                        particleNumber,
                                                                                        &self._vertexCoordinatesView[0,0],
                                                                                        self._vertexCoordinates.size,
@@ -105,7 +123,20 @@ cdef class MarmotParticleWrapper:
                                                                                        materialName.upper().encode('utf-8'),
                                                                                        &self.materialPropertiesView[0],
                                                                                        nMaterialProperties,
-                                                                                       self._marmotMeshfreeApproximation[0],
+                                                                                       self._marmotMeshfreeApproximation[0], #Dereference U
+                                                                                       )
+            else:
+                # mixed particle (2 approximations)
+                self._marmotParticle = MarmotParticleFactory.createParticle(particleType.encode('utf-8'),
+                                                                                       particleNumber,
+                                                                                       &self._vertexCoordinatesView[0,0],
+                                                                                       self._vertexCoordinates.size,
+                                                                                       volume,
+                                                                                       materialName.upper().encode('utf-8'),
+                                                                                       &self.materialPropertiesView[0],
+                                                                                       nMaterialProperties,
+                                                                                       self._marmotMeshfreeApproximation[0], #Dereference U
+                                                                                       _marmotMeshfreeApproximationPJ[0], #Dereference PJ
                                                                                        )
         except ValueError:
             raise NotImplementedError("Failed to create instance of MarmotParticle {:}.".format(particleType))
@@ -234,17 +265,29 @@ cdef class MarmotParticleWrapper:
         self._marmotParticle.getInterpolationVector(&Nview_[0], &coordinates[0])
         return N
 
-    def assignKernelFunctions(self, list marmotMeshfreeKernelFunctionWrappers):
+    def assignKernelFunctions(self, list marmotMeshfreeKernelFunctionWrappers, list marmotMeshfreeKernelFunctionWrappersPJ = None):
         self._assignedKernelFunctions = marmotMeshfreeKernelFunctionWrappers
         self._nAssignedKernelFunctions = len(marmotMeshfreeKernelFunctionWrappers)
 
         cdef vector[const MarmotMeshfreeKernelFunction*] kernelFunctions
-
+        cdef vector[const MarmotMeshfreeKernelFunction*] kernelFunctionsPJ
         cdef MarmotMeshfreeKernelFunctionWrapper k
+
         for k in marmotMeshfreeKernelFunctionWrappers:
             kernelFunctions.push_back(k._marmotMeshfreeKernelFunction)
 
-        self._marmotParticle.assignMeshfreeKernelFunctions(kernelFunctions)
+        if marmotMeshfreeKernelFunctionWrappersPJ is not None:
+
+            for k in marmotMeshfreeKernelFunctionWrappersPJ:
+                kernelFunctionsPJ.push_back(k._marmotMeshfreeKernelFunction)
+
+            #call 2-argument c++ method
+            self._marmotParticle.assignMeshfreeKernelFunctions(kernelFunctions, kernelFunctionsPJ)
+        else:
+            #call 1-argument c++ method
+            self._marmotParticle.assignMeshfreeKernelFunctions(kernelFunctions)
+
+        #self._marmotParticle.assignMeshfreeKernelFunctions(kernelFunctions)
 
         self._nodes = [kf.node for kf in self._assignedKernelFunctions]
         self._fields = [ self._baseFields for n in self._nodes ]
