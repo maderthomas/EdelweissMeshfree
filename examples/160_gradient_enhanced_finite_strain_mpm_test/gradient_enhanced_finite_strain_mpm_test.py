@@ -45,7 +45,15 @@ cells is compressed by 2 % from the right, with two of Marmot's gradient-enhance
 The grid is taller than the block, so that the lateral expansion keeps every material point inside it. Checks:
 the imposed shortening is reached, the material-specific mechanism is active (damage / plastic flow), and the
 material point displacements match the gold file of each material.
+
+The boundary conditions (left edge fixed in x, one grid node fixed in y, free top and bottom) admit a homogeneous
+solution, which the Quad4 grid represents exactly. For the Drucker-Prager material (with hardening and a
+nonlocal damage that is not over-nonlocal, so that the homogeneous state stays stable) the test verifies it
+against the single material point solution: a linear displacement field, a uniform nonlocal field, and the
+lateral stretch of the homogeneous state. On the Eulerian grid each of the ten increments shortens the current
+length by 0.2 %, so the axial stretch is 0.998^10.
 """
+
 import argparse
 
 import numpy as np
@@ -77,7 +85,7 @@ MATERIALS = {
     # K, G, c0, phi, psi, H, As, epsF, omegaMax, l, m, rho
     "druckerprager": {
         "material": "GradientEnhancedFiniteStrainDruckerPrager",
-        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 0.0, 0.0, 0.005, 0.99, 2.0, 1.5, 1.0]),
+        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 100.0, 0.0, 0.02, 0.99, 2.0, 1.0, 1.0]),
     },
 }
 
@@ -185,6 +193,27 @@ def change_test_dir(request, monkeypatch):
     monkeypatch.chdir(request.fspath.dirname)
 
 
+# the homogeneous plane strain state after ten increments of 0.2 % shortening each, computed for a single material
+# point of GradientEnhancedFiniteStrainDruckerPrager with the properties above (tau_yy = 0, nonlocal = local field)
+HOMOGENEOUS_DRUCKERPRAGER = {"lateral stretch": 1.0164877609, "nonlocal field": 3.920030e-03, "alphaP": 2.210223e-02}
+
+
+def checkHomogeneousDruckerPrager(mpmModel, u, n):
+    x = np.array([mp.getCenterCoordinates()[:2] for mp in mpmModel.materialPoints.values()])
+    X = x - u[:, :2]
+    A = np.c_[X, np.ones(len(X))]
+    for i in range(2):
+        c = np.linalg.lstsq(A, u[:, i], rcond=None)[0]
+        assert np.abs(A @ c - u[:, i]).max() < 1e-8, "the displacement field must be homogeneous"
+        if i == 0:
+            assert abs(c[0] - (0.998**10 - 1.0)) < 1e-8, "axial stretch of the imposed shortening"
+        else:
+            assert abs(c[1] - (HOMOGENEOUS_DRUCKERPRAGER["lateral stretch"] - 1.0)) < 1e-6, "lateral stretch"
+    assert np.abs(n - HOMOGENEOUS_DRUCKERPRAGER["nonlocal field"]).max() < 1e-8, "uniform nonlocal field"
+    alphaP = result(mpmModel, "alphaP")
+    assert np.abs(alphaP - HOMOGENEOUS_DRUCKERPRAGER["alphaP"]).max() < 1e-7, "uniform hardening variable"
+
+
 @pytest.mark.parametrize("materialName", MATERIALS.keys())
 def test_sim(assert_gold, materialName):
     mpmModel = run_sim(materialName)
@@ -197,6 +226,7 @@ def test_sim(assert_gold, materialName):
     else:
         assert result(mpmModel, "alphaP").max() > 0.0, "the material must yield"
         assert n.max() > 0.0, "the plastic flow must drive the nonlocal field"
+        checkHomogeneousDruckerPrager(mpmModel, u, n)
 
     assert_gold(u, np.loadtxt(goldFile(materialName)))
 

@@ -43,6 +43,7 @@ plasticity whose dilatant flow drives the implicit-gradient damage). Boundary co
 Lagrange multipliers. Checks: the material-specific mechanism is active (damage / plastic flow), and the particle
 displacements match the gold file of each particle type and material.
 """
+
 import argparse
 
 import numpy as np
@@ -89,7 +90,7 @@ MATERIALS = {
     # K, G, c0, phi, psi, H, As, epsF, omegaMax, l, m, rho
     "druckerprager": {
         "material": "GradientEnhancedFiniteStrainDruckerPrager",
-        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 0.0, 0.0, 0.005, 0.99, 2.0, 1.5, 0.0]),
+        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 100.0, 0.0, 0.02, 0.99, 2.0, 1.0, 0.0]),
     },
 }
 
