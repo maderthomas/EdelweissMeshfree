@@ -148,7 +148,9 @@ def run_sim(particleType, materialName):
     sets = model.particleSets
     for name, particleSet, values in (
         ("bottom", sets["specimen_bottom"], {1: 0.0}),
-        ("corner", sets["specimen_leftBottom"], {0: 0.0, 1: 0.0}),
+        # the corner lies on the bottom edge, whose y displacement is constrained already: fixing it again
+        # would add a linearly dependent Lagrange multiplier row
+        ("corner", sets["specimen_leftBottom"], {0: 0.0}),
         ("top", sets["specimen_top"], {1: COMPRESSION}),
     ):
         model.constraints.update(
@@ -186,6 +188,7 @@ def run_sim(particleType, materialName):
 
 
 def result(fieldOutputController, name):
+    """The last result, one row per particle (vector fields have three components also in 2D)."""
     return np.asarray(fieldOutputController.fieldOutputs[name].getLastResult())
 
 
@@ -206,10 +209,12 @@ def change_test_dir(request, monkeypatch):
 @pytest.mark.parametrize("particleType", PARTICLE_TYPES)
 def test_sim(assert_gold, particleType, materialName):
     fieldOutputController = run_sim(particleType, materialName)
-    u = result(fieldOutputController, "displacement").reshape(-1, 2)
+    u = result(fieldOutputController, "displacement")[:, :2]
     n = result(fieldOutputController, "nonlocal damage").ravel()
 
     assert np.isfinite(u).all() and np.isfinite(n).all()
+    assert u.shape == (32, 2), "one (u_x, u_y) row per particle"
+    assert abs(u[:, 1].min() - COMPRESSION) < 1e-8, "the top edge must follow the imposed compression"
     if materialName == "neohooke":
         assert n.max() > 5 * KAPPA0, "the nonlocal field must drive the material well into damage"
     else:
@@ -227,7 +232,7 @@ if __name__ == "__main__":
     for materialName in MATERIALS:
         for particleType in PARTICLE_TYPES:
             fieldOutputController = run_sim(particleType, materialName)
-            u = result(fieldOutputController, "displacement").reshape(-1, 2)
+            u = result(fieldOutputController, "displacement")[:, :2]
             n = result(fieldOutputController, "nonlocal damage").ravel()
             print(materialName, particleType, "max nonlocal field", n.max(), " min u_y", u[:, 1].min())
             if args.create_gold:
