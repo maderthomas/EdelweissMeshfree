@@ -82,12 +82,30 @@ jobs:
           make install
           cd ..
 
+      - name: Build Boost
+        shell: bash -l {0}
+        run: |
+          # EdelweissFE's conda_requirements.txt deliberately no longer installs boost-cpp: its only
+          # conda-forge build pins icu<76, which conflicts with the free-threaded matplotlib build (see
+          # EdelweissFE's run_tests_with_marmot.yml). Without Boost, AMGCL's headers are unusable and
+          # EdelweissFE's amgcl extension is silently skipped, so every blockamg test failed with
+          # "No module named 'edelweissfe.linsolve.amgcl.amgcl'". Build the libraries AMGCL needs from
+          # source, into the conda prefix, exactly as EdelweissFE's CI does.
+          cd "$RUNNER_TEMP"
+          curl -L -o boost_1_85_0.tar.gz https://archives.boost.io/release/1.85.0/source/boost_1_85_0.tar.gz
+          tar xzf boost_1_85_0.tar.gz
+          cd boost_1_85_0
+          ./bootstrap.sh --prefix=$CONDA_PREFIX --with-libraries=program_options,serialization,test
+          ./b2 install
+          cd ..
+
       - name: Install AMGCL
         shell: bash -l {0}
         run: |
           git clone --branch 1.4.7 --depth 1 https://github.com/ddemidov/amgcl.git "$RUNNER_TEMP/amgcl"
           cd "$RUNNER_TEMP/amgcl"
-          cmake -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX .
+          # point cmake at the Boost just built, not at whatever else it may find on the runner
+          cmake -DCMAKE_INSTALL_PREFIX=$CONDA_PREFIX -DBOOST_ROOT=$CONDA_PREFIX -DCMAKE_PREFIX_PATH=$CONDA_PREFIX .
           make install
           cd ..
 
