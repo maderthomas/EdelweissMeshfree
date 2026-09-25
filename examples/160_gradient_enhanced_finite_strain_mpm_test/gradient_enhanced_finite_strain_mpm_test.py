@@ -33,13 +33,18 @@
 #  The full text of the license can be found in the file LICENSE.md at
 #  the top level directory of EdelweissMeshfree.
 #  ---------------------------------------------------------------------
-"""MPM with the gradient-enhanced finite-strain cell, material point and damage material.
+"""MPM with the gradient-enhanced finite-strain cell, material point and materials.
 
 A plane strain block (20 x 4) of material points on a background grid of GradientEnhancedFiniteStrain/Quad4
-cells is compressed by 2 % from the right, twenty times the damage threshold of Marmot's
-GradientEnhancedCompressibleNeoHookeDamage. The grid is taller than the block, so that the lateral expansion
-keeps every material point inside it. Checks: the nonlocal field exceeds the damage threshold, the imposed
-shortening is reached, and the material point displacements match the gold file.
+cells is compressed by 2 % from the right, with two of Marmot's gradient-enhanced finite-strain materials:
+
+- GradientEnhancedCompressibleNeoHookeDamage, loaded to twenty times its damage threshold;
+- GradientEnhancedFiniteStrainDruckerPrager, which yields on the Drucker-Prager cone, with the dilatant plastic
+  flow driving the implicit-gradient damage.
+
+The grid is taller than the block, so that the lateral expansion keeps every material point inside it. Checks:
+the imposed shortening is reached, the material-specific mechanism is active (damage / plastic flow), and the
+material point displacements match the gold file of each material.
 """
 import argparse
 
@@ -63,8 +68,21 @@ from edelweissmeshfree.stepactions.dirichlet import Dirichlet
 KAPPA0 = 1e-3
 SHORTENING = 0.4
 
+MATERIALS = {
+    # K, G, kappa0, kappaF, l, rho
+    "neohooke": {
+        "material": "GradientEnhancedCompressibleNeoHookeDamage",
+        "properties": np.array([3500.0, 1500.0, KAPPA0, 1e-2, 2.0, 1.0]),
+    },
+    # K, G, c0, phi, psi, H, As, epsF, omegaMax, l, m, rho
+    "druckerprager": {
+        "material": "GradientEnhancedFiniteStrainDruckerPrager",
+        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 0.0, 0.0, 0.005, 0.99, 2.0, 1.5, 1.0]),
+    },
+}
 
-def run_sim():
+
+def run_sim(materialName):
     dimension = 2
 
     journal = Journal()
@@ -84,11 +102,7 @@ def run_sim():
         cellType="GradientEnhancedFiniteStrain/Quad4",
     )
 
-    material = {
-        "material": "GradientEnhancedCompressibleNeoHookeDamage",
-        # K, G, kappa0, kappaF, l, rho
-        "properties": np.array([3500.0, 1500.0, KAPPA0, 1e-2, 2.0, 1.0]),
-    }
+    material = MATERIALS[materialName]
 
     rectangularmpgenerator.generateModelData(
         mpmModel,
@@ -155,10 +169,12 @@ def run_sim():
     return mpmModel
 
 
-def results(mpmModel):
-    u = np.array([mp.getResultArray("displacement") for mp in mpmModel.materialPoints.values()])
-    n = np.array([mp.getResultArray("nonlocal damage") for mp in mpmModel.materialPoints.values()])
-    return u, n
+def result(mpmModel, name):
+    return np.array([mp.getResultArray(name) for mp in mpmModel.materialPoints.values()])
+
+
+def goldFile(materialName):
+    return "gold_" + materialName + ".csv"
 
 
 @pytest.fixture(autouse=True)
@@ -169,24 +185,31 @@ def change_test_dir(request, monkeypatch):
     monkeypatch.chdir(request.fspath.dirname)
 
 
-def test_sim(assert_gold):
-    mpmModel = run_sim()
-    u, n = results(mpmModel)
+@pytest.mark.parametrize("materialName", MATERIALS.keys())
+def test_sim(assert_gold, materialName):
+    mpmModel = run_sim(materialName)
+    u = result(mpmModel, "displacement")
+    n = result(mpmModel, "nonlocal damage")
 
-    assert n.max() > 5 * KAPPA0, "the nonlocal field must drive the material well into damage"
     assert u[:, 0].min() < -0.9 * SHORTENING, "the right end must follow the imposed shortening"
+    if materialName == "neohooke":
+        assert n.max() > 5 * KAPPA0, "the nonlocal field must drive the material well into damage"
+    else:
+        assert result(mpmModel, "alphaP").max() > 0.0, "the material must yield"
+        assert n.max() > 0.0, "the plastic flow must drive the nonlocal field"
 
-    assert_gold(u, np.loadtxt("gold.csv"))
+    assert_gold(u, np.loadtxt(goldFile(materialName)))
 
 
 if __name__ == "__main__":
-    mpmModel = run_sim()
-    u, n = results(mpmModel)
-    print("max nonlocal field", n.max(), " min u_x", u[:, 0].min())
-
     parser = argparse.ArgumentParser()
-    parser.add_argument("--create-gold", dest="create_gold", action="store_true", help="create the gold file.")
+    parser.add_argument("--create-gold", dest="create_gold", action="store_true", help="create the gold files.")
     args = parser.parse_args()
 
-    if args.create_gold:
-        np.savetxt("gold.csv", u)
+    for materialName in MATERIALS:
+        mpmModel = run_sim(materialName)
+        u = result(mpmModel, "displacement")
+        n = result(mpmModel, "nonlocal damage")
+        print(materialName, "max nonlocal field", n.max(), " min u_x", u[:, 0].min())
+        if args.create_gold:
+            np.savetxt(goldFile(materialName), u)

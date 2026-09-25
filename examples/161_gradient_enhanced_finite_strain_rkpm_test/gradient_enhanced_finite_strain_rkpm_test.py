@@ -37,9 +37,11 @@
 
 A plane strain block (4 x 8) of stabilized-conforming-nodal-integration quad particles
 (GradientEnhancedFiniteStrainSQCNI and ...SQCNIxNSNI) with a reproducing kernel approximation is compressed by
-2 %, twenty times the damage threshold of Marmot's GradientEnhancedCompressibleNeoHookeDamage. Boundary
-conditions are imposed weakly with Lagrange multipliers. Checks: the nonlocal field exceeds the damage
-threshold, and the particle displacements match the gold file of each particle type.
+2 %, with two of Marmot's gradient-enhanced finite-strain materials: GradientEnhancedCompressibleNeoHookeDamage
+(loaded to twenty times its damage threshold) and GradientEnhancedFiniteStrainDruckerPrager (Drucker-Prager
+plasticity whose dilatant flow drives the implicit-gradient damage). Boundary conditions are imposed weakly with
+Lagrange multipliers. Checks: the material-specific mechanism is active (damage / plastic flow), and the particle
+displacements match the gold file of each particle type and material.
 """
 import argparse
 
@@ -78,6 +80,19 @@ from edelweissmeshfree.solvers.nqs import NonlinearQuasistaticSolver
 KAPPA0 = 1e-3
 COMPRESSION = -0.16  # 2 % of the height
 
+MATERIALS = {
+    # K, G, kappa0, kappaF, l, rho (zero density: no inertia in this quasi-static test)
+    "neohooke": {
+        "material": "GradientEnhancedCompressibleNeoHookeDamage",
+        "properties": np.array([3500.0, 1500.0, KAPPA0, 1e-2, 2.0, 0.0]),
+    },
+    # K, G, c0, phi, psi, H, As, epsF, omegaMax, l, m, rho
+    "druckerprager": {
+        "material": "GradientEnhancedFiniteStrainDruckerPrager",
+        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 0.0, 0.0, 0.005, 0.99, 2.0, 1.5, 0.0]),
+    },
+}
+
 PARTICLE_TYPES = [
     "GradientEnhancedFiniteStrainSQCNI/PlaneStrain/Quad",
     "GradientEnhancedFiniteStrainSQCNIxNSNI/PlaneStrain/Quad",
@@ -87,7 +102,7 @@ PARTICLE_TYPES = [
 _approximations = []
 
 
-def run_sim(particleType):
+def run_sim(particleType, materialName):
     dimension = 2
     journal = Journal()
     model = MPMModel(dimension)
@@ -116,11 +131,7 @@ def run_sim(particleType):
     approximation = MarmotMeshfreeApproximationWrapper("ReproducingKernel", dimension, completenessOrder=1)
     _approximations.append(approximation)
 
-    # K, G, kappa0, kappaF, l, rho (zero density: no inertia in this quasi-static test)
-    material = {
-        "material": "GradientEnhancedCompressibleNeoHookeDamage",
-        "properties": np.array([3500.0, 1500.0, KAPPA0, 1e-2, 2.0, 0.0]),
-    }
+    material = MATERIALS[materialName]
 
     def particleFactory(number, vertexCoordinates, volume):
         return MarmotParticleWrapper(particleType, number, vertexCoordinates, volume, approximation, material)
@@ -149,7 +160,8 @@ def run_sim(particleType):
     model.prepareYourself(journal)
 
     fieldOutputController = MPMFieldOutputController(model, journal)
-    for name in ("displacement", "nonlocal damage"):
+    outputs = ["displacement", "nonlocal damage"] + (["alphaP"] if materialName == "druckerprager" else [])
+    for name in outputs:
         fieldOutputController.addPerParticleFieldOutput(name, sets["all"], name)
     fieldOutputController.initializeJob()
 
@@ -173,14 +185,13 @@ def run_sim(particleType):
     return fieldOutputController
 
 
-def results(fieldOutputController):
-    u = np.asarray(fieldOutputController.fieldOutputs["displacement"].getLastResult()).reshape(-1, 2)
-    n = np.asarray(fieldOutputController.fieldOutputs["nonlocal damage"].getLastResult()).ravel()
-    return u, n
+def result(fieldOutputController, name):
+    return np.asarray(fieldOutputController.fieldOutputs[name].getLastResult())
 
 
-def goldFile(particleType):
-    return "gold_" + particleType.split("/")[0] + ".csv"
+def goldFile(particleType, materialName):
+    suffix = "" if materialName == "neohooke" else "_" + materialName
+    return "gold_" + particleType.split("/")[0] + suffix + ".csv"
 
 
 @pytest.fixture(autouse=True)
@@ -191,14 +202,21 @@ def change_test_dir(request, monkeypatch):
     monkeypatch.chdir(request.fspath.dirname)
 
 
+@pytest.mark.parametrize("materialName", MATERIALS.keys())
 @pytest.mark.parametrize("particleType", PARTICLE_TYPES)
-def test_sim(assert_gold, particleType):
-    u, n = results(run_sim(particleType))
+def test_sim(assert_gold, particleType, materialName):
+    fieldOutputController = run_sim(particleType, materialName)
+    u = result(fieldOutputController, "displacement").reshape(-1, 2)
+    n = result(fieldOutputController, "nonlocal damage").ravel()
 
     assert np.isfinite(u).all() and np.isfinite(n).all()
-    assert n.max() > 5 * KAPPA0, "the nonlocal field must drive the material well into damage"
+    if materialName == "neohooke":
+        assert n.max() > 5 * KAPPA0, "the nonlocal field must drive the material well into damage"
+    else:
+        assert result(fieldOutputController, "alphaP").max() > 0.0, "the material must yield"
+        assert n.max() > 0.0, "the plastic flow must drive the nonlocal field"
 
-    assert_gold(u, np.loadtxt(goldFile(particleType)))
+    assert_gold(u, np.loadtxt(goldFile(particleType, materialName)))
 
 
 if __name__ == "__main__":
@@ -206,8 +224,11 @@ if __name__ == "__main__":
     parser.add_argument("--create-gold", dest="create_gold", action="store_true", help="create the gold files.")
     args = parser.parse_args()
 
-    for particleType in PARTICLE_TYPES:
-        u, n = results(run_sim(particleType))
-        print(particleType, "max nonlocal field", n.max(), " min u_y", u[:, 1].min())
-        if args.create_gold:
-            np.savetxt(goldFile(particleType), u)
+    for materialName in MATERIALS:
+        for particleType in PARTICLE_TYPES:
+            fieldOutputController = run_sim(particleType, materialName)
+            u = result(fieldOutputController, "displacement").reshape(-1, 2)
+            n = result(fieldOutputController, "nonlocal damage").ravel()
+            print(materialName, particleType, "max nonlocal field", n.max(), " min u_y", u[:, 1].min())
+            if args.create_gold:
+                np.savetxt(goldFile(particleType, materialName), u)
