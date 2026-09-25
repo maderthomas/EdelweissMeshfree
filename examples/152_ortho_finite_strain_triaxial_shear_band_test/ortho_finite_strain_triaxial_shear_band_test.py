@@ -464,18 +464,13 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         # part has 4 vertices, so perNode would abort with "Variable displacement result size
         # (128) does not match the number of nodes (512)".  perElement for quads, and a proper
         # per-vertex field alongside it.
-        ensightOutput.updateDefinition(
-            fieldOutput=fieldOutputController.fieldOutputs["displacement"],
-            create="perElement" if quad else "perNode",
-        )
         if quad:
-            ensightOutput.updateDefinition(
-                fieldOutput=fieldOutputController.fieldOutputs["vertex displacements"], create="perNode"
-            )
+            ensightOutput.createPerElementOutput(fieldOutputController.fieldOutputs["displacement"])
+            ensightOutput.createPerNodeOutput(fieldOutputController.fieldOutputs["vertex displacements"])
+        else:
+            ensightOutput.createPerNodeOutput(fieldOutputController.fieldOutputs["displacement"])
         for name in ("omega", "alphaP", "frameRotation", "materialAxis1", "stress"):
-            ensightOutput.updateDefinition(
-                fieldOutput=fieldOutputController.fieldOutputs[name], create="perElement"
-            )
+            ensightOutput.createPerElementOutput(fieldOutputController.fieldOutputs[name])
         ensightOutput.initializeJob()
         outputManagers.append(ensightOutput)
 
