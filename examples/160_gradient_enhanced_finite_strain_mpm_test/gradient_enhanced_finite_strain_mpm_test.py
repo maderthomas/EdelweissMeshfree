@@ -82,10 +82,10 @@ MATERIALS = {
         "material": "GradientEnhancedCompressibleNeoHookeDamage",
         "properties": np.array([3500.0, 1500.0, KAPPA0, 1e-2, 2.0, 1.0]),
     },
-    # K, G, c0, phi, psi, H, As, epsF, omegaMax, l, m, rho
+    # K, G, c0, phi, psi, H, epsF, omegaMax, l, m, rho
     "druckerprager": {
         "material": "GradientEnhancedFiniteStrainDruckerPrager",
-        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 100.0, 0.0, 0.02, 0.99, 2.0, 1.0, 1.0]),
+        "properties": np.array([3500.0, 1500.0, 5.0, 30.0, 10.0, 100.0, 0.02, 0.99, 2.0, 1.0, 1.0]),
     },
 }
 
