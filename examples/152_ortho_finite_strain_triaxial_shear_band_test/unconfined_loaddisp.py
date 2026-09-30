@@ -72,7 +72,7 @@ def main():
     fig.legend(handles=h, loc="upper center", ncol=4, fontsize=9 * FS, frameon=False,
                bbox_to_anchor=(0.5, 1.02))
     fig.suptitle("Unconfined plane-strain compression, paper card, "
-                 r"$h_p = l_d = 5$ mm", fontsize=9.5 * FS, y=0.90)
+                 + os.environ.get("UC_HLABEL", r"$h_p = l_d = 5$ mm"), fontsize=9.5 * FS, y=0.90)
     fig.tight_layout(rect=(0, 0, 1, 0.86))
     out = os.path.join(HERE, "fig_unconfined_loaddisp.pdf")
     fig.savefig(out)
