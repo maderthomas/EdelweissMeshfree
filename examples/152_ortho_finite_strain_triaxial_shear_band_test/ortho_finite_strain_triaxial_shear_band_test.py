@@ -514,8 +514,23 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     # noise exceeds 1e-3 of the increment and the criterion can never be met -- every cutback
     # makes it worse.  An absolute bound far below any physical displacement (the spacing is
     # ~3 mm) accepts those iterates; the flux residual tolerance is unchanged.
+    # ABSOLUTE displacement flux tolerance [N].  Once the band has formed in an UNCONFINED test the
+    # spatially averaged flux collapses, and the flip-flop of particles between plastic loading
+    # and elastic unloading next to the band leaves a residual floor of ~1e-2 N that the relative
+    # criterion then cannot meet.  1e-2 N is ~1e-4 of one particle's force at the peak.
+    if OVERRIDES.get("fluxAbs"):
+        iterationOptions.setdefault("spec. absolute flux residual tolerances", {})["displacement"] = OVERRIDES["fluxAbs"]
     if OVERRIDES.get("dduAbs"):
         iterationOptions["spec. absolute field correction tolerances"] = {"displacement": OVERRIDES["dduAbs"]}
+    # ABSOLUTE flux tolerance of the nonlocal field.  Right after the damage onset the source
+    # alphaL is ~0, the spatially averaged nonlocal flux is tiny, and the same noise floor
+    # (~1e-10, on particle volumes of ~10 mm^3) fails the RELATIVE flux criterion.  EdelweissFE
+    # applies an absolute floor of 1e-7 to this field anyway; the meshfree default is 1e-14.
+    if OVERRIDES.get("nlFluxAbs"):
+        iterationOptions.setdefault("spec. absolute flux residual tolerances", {})["nonlocal damage"] = OVERRIDES["nlFluxAbs"]
+        # ... and the same for its CORRECTION (field values ~1e-3; noise ~5e-9), which the relative
+        # criterion cannot meet either while the source is still ~0
+        iterationOptions.setdefault("spec. absolute field correction tolerances", {})["nonlocal damage"] = 1e-8
     linearSolver = getLinSolverByName("pardiso", {})
     nonlinearSolver = NonlinearQuasistaticSolver(journal)
 
@@ -1046,6 +1061,10 @@ if __name__ == "__main__":
     parser.add_argument("--strain", type=float, default=None, help="nominal shortening target")
     parser.add_argument("--ddu-abs", dest="dduAbs", type=float, default=None,
                         help="absolute displacement-correction tolerance in mm (see run_sim)")
+    parser.add_argument("--flux-abs", dest="fluxAbs", type=float, default=None,
+                        help="absolute flux-residual tolerance of the displacement field in N")
+    parser.add_argument("--nl-flux-abs", dest="nlFluxAbs", type=float, default=None,
+                        help="absolute flux-residual tolerance of the nonlocal damage field")
     parser.add_argument("--tag", default="", help="suffix for the output file names, so several "
                                                  "mesh sizes can be run side by side")
     args = parser.parse_args()
@@ -1063,7 +1082,7 @@ if __name__ == "__main__":
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
                      ("hres", args.hres), ("As", args.As), ("unload", args.unload),
-                     ("dduAbs", args.dduAbs)):
+                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("fluxAbs", args.fluxAbs)):
         if val is not None:
             OVERRIDES[key] = val
     if args.strain is not None:
