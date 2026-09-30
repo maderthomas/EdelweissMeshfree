@@ -272,6 +272,9 @@ NIANDOU = dict(
     ALPHA=1.0, BETA=1.0, GAMMA=1.0, ZETA=1.0, XI=1.0, ETA=1.0,
     BEDDING_PHI_DEG=45.0,             # beta: inclination of the stratification planes
     AXIAL_STRAIN=0.04,                # 3 mm of 75 mm
+    # the model of main.tex exactly: damage starts once hardening is complete (alphaP >= 1) and
+    # q_h = 1 beyond it.  The paper's runs before 2026-09-30 used 0.95 / 0.02 (--onset/--hres).
+    DAMAGE_ONSET=1.0, H_RESIDUAL=0.0,
 )
 
 
@@ -504,6 +507,15 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         "line search every n iterations": 2,
         "line search alphas": [0.25, 0.5, 0.75, 1.0],
     }
+    # ABSOLUTE displacement-correction tolerance [mm].  The default correction criterion is
+    # RELATIVE to the increment, and at the plastic limit load the forward-difference tangent
+    # leaves a fixed noise floor of ~1e-5 mm in the Newton iterates (a period-2 limit cycle with
+    # the flux residual already converged).  Once the increment is cut back far enough that
+    # noise exceeds 1e-3 of the increment and the criterion can never be met -- every cutback
+    # makes it worse.  An absolute bound far below any physical displacement (the spacing is
+    # ~3 mm) accepts those iterates; the flux residual tolerance is unchanged.
+    if OVERRIDES.get("dduAbs"):
+        iterationOptions["spec. absolute field correction tolerances"] = {"displacement": OVERRIDES["dduAbs"]}
     linearSolver = getLinSolverByName("pardiso", {})
     nonlinearSolver = NonlinearQuasistaticSolver(journal)
 
@@ -1032,6 +1044,8 @@ if __name__ == "__main__":
                              "which has a singular tangent at the plastic limit load)")
     parser.add_argument("--m", type=float, default=None, help="over-nonlocal weighting m")
     parser.add_argument("--strain", type=float, default=None, help="nominal shortening target")
+    parser.add_argument("--ddu-abs", dest="dduAbs", type=float, default=None,
+                        help="absolute displacement-correction tolerance in mm (see run_sim)")
     parser.add_argument("--tag", default="", help="suffix for the output file names, so several "
                                                  "mesh sizes can be run side by side")
     args = parser.parse_args()
@@ -1048,7 +1062,8 @@ if __name__ == "__main__":
 
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
-                     ("hres", args.hres), ("As", args.As), ("unload", args.unload)):
+                     ("hres", args.hres), ("As", args.As), ("unload", args.unload),
+                     ("dduAbs", args.dduAbs)):
         if val is not None:
             OVERRIDES[key] = val
     if args.strain is not None:
