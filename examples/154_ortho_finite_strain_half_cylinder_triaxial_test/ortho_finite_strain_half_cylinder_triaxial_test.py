@@ -193,7 +193,7 @@ def faceArea(V):
 
 
 def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, frameUpdate=1.0,
-            supportFactor=1.2, tangent=0.0, dduAbs=1e-4, fluxAbs=None, nlFluxAbs=1e-8, inc=0.01,
+            supportFactor=1.5, tangent=0.0, dduAbs=1e-4, fluxAbs=None, nlFluxAbs=1e-8, inc=0.01,
             completeness=1, continuity=2, cwf=True):
     np.set_printoptions(linewidth=200, precision=4)
     dimension = 3
@@ -473,7 +473,7 @@ if __name__ == "__main__":
     ap.add_argument("--confine", type=float, default=30.0)
     ap.add_argument("--umax", type=float, default=6.0)
     ap.add_argument("--inc", type=float, default=0.01)
-    ap.add_argument("--support", type=float, default=1.2)
+    ap.add_argument("--support", type=float, default=1.5)  # 1.2h: near-singular RK at the boundary faces with CWF
     ap.add_argument("--cwf", type=int, default=1)
     ap.add_argument("--frame", type=float, default=1.0)
     ap.add_argument("--tangent", type=float, default=0.0)
