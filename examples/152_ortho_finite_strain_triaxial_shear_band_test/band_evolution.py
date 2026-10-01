@@ -277,14 +277,14 @@ def main():
         a.set_axis_off()                      # no box, no ticks, no annotations
         if iUnload is not None and k == iUnload:
             a.set_title(f"unloaded, $\\sigma_{{\\rm dev}}\\!\\approx\\!0$\n"
-                        f"$\\varepsilon_{{yy}}$ = {short[k] * 100:.2f} \\%", fontsize=10 * FS)
+                        f"$\\varepsilon$ = {short[k] * 100:.2f} \\%", fontsize=10 * FS)
         else:
             # t/t_end from the PRESCRIBED shortening, not from the increment index: the axial
             # displacement is imposed at a constant rate so time is proportional to it, whereas
             # the increments cluster heavily where the stepper cuts back (in the band), which made
             # index fractions read 0.07 ... 0.24 for states spanning most of the loading.
             a.set_title(f"$t/t_{{\\rm end}}$ = {short[k] / max(short[iLast], 1e-30):.2f}\n"
-                        f"$\\varepsilon_{{yy}}$ = {short[k] * 100:.2f} \\%", fontsize=10 * FS)
+                        f"$\\varepsilon$ = {short[k] * 100:.2f} \\%", fontsize=10 * FS)
     hs = []
     if which in ("both", "plastic"):
         hs.append(Line2D([], [], color=C_PLASTIC, lw=2.2, path_effects=PE,
