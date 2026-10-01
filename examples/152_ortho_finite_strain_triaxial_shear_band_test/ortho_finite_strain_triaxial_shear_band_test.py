@@ -449,7 +449,7 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
 
     fieldOutputController = MPMFieldOutputController(theModel, journal)
     for name in ("displacement", "stress", "omega", "alphaP", "frameRotation",
-                 "materialAxis1", "materialAxis2"):
+                 "materialAxis1", "materialAxis2", "nonlocal damage", "alphaD"):
         fieldOutputController.addPerParticleFieldOutput(name, theModel.particleSets["all"], name)
     if quad:
         fieldOutputController.addPerParticleFieldOutput(
@@ -578,6 +578,8 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
                 u=u.copy(),
                 omega=omega,
                 alphaP=fo["alphaP"].getLastResult().reshape(-1).copy(),
+                alphaNL=fo["nonlocal damage"].getLastResult().reshape(-1).copy(),
+                alphaD=fo["alphaD"].getLastResult().reshape(-1).copy(),
                 frameRotation=fo["frameRotation"].getLastResult().reshape(-1).copy(),
                 axis1=fo["materialAxis1"].getLastResult().reshape(-1, 3).copy(),
                 axis2=fo["materialAxis2"].getLastResult().reshape(-1, 3).copy(),
@@ -1130,6 +1132,8 @@ if __name__ == "__main__":
             omega=np.array([sn["omega"] for sn in r["snapshots"]]),
             frameRotation=np.array([sn["frameRotation"] for sn in r["snapshots"]]),
             alphaP=np.array([sn["alphaP"] for sn in r["snapshots"]]),
+            alphaNL=np.array([sn["alphaNL"] for sn in r["snapshots"]]),
+            alphaD=np.array([sn["alphaD"] for sn in r["snapshots"]]),
             axis1=np.array([sn["axis1"] for sn in r["snapshots"]]),
             axis2=np.array([sn["axis2"] for sn in r["snapshots"]]),
             u=np.array([sn["u"] for sn in r["snapshots"]]),
