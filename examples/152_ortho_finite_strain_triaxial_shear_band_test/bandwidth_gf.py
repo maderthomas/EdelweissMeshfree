@@ -23,7 +23,8 @@ import numpy as np
 from band_evolution import fastCmap, npzPath, paperStyle
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CASES = [("GFa_b", 5.00, 4.7485e-4, 2.50), ("GFb_b", 2.50, 9.4970e-4, 1.25)]
+_P = os.environ.get("GF_PREFIX", "GF")
+CASES = [(f"{_P}a_b", 5.00, 4.7485e-4, 2.50), (f"{_P}b_b", 2.50, 9.4970e-4, 1.25)]
 FTU = 9.1608
 
 

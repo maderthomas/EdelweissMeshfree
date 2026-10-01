@@ -57,6 +57,23 @@ def main():
         ax[2].plot(omMax[: iL + 1], sig[: iL + 1] / max(sig[iPk], 1e-30), color=cols[b], lw=1.9)
         rows.append((b, sig[iPk], s[iPk], sig[iL], s[iL], omMax[iL],
                      100 * (1 - sig[iL] / sig[iPk]), iL < len(s) - 2))
+    # optional finite element overlay (niandou_triaxial_fe.py run 0): UC_FE_DIR, UC_FE_GLOB
+    feDir = os.environ.get("UC_FE_DIR")
+    feRows = []
+    if feDir:
+        for b in BETAS:
+            f = sorted(glob.glob(os.path.join(feDir, os.environ.get("UC_FE_GLOB", "nt_b{b}_s0_h*_f1*.npz").format(b=b))))
+            if not f:
+                continue
+            d = np.load(f[0])
+            s = np.abs(np.asarray(d["U"]).reshape(-1)) / HEIGHT * 100.0
+            sig = np.abs(np.asarray(d["dF"]).reshape(-1)) / 37.0
+            om = np.asarray(d["omegaMax"]).reshape(-1)
+            ax[0].plot(s, sig, color=cols[b], lw=1.3, ls="--")
+            ax[1].plot(s, om, color=cols[b], lw=1.3, ls="--")
+            iPk = int(np.argmax(sig))
+            ax[2].plot(om, sig / max(sig[iPk], 1e-30), color=cols[b], lw=1.3, ls="--")
+            feRows.append((b, sig[iPk], s[iPk], sig[-1], s[-1], om.max()))
     ax[0].set_xlabel(r"axial shortening in \%")
     ax[0].set_ylabel(r"$\sigma_{yy}$ in MPa")
     ax[1].set_xlabel(r"axial shortening in \%")
@@ -68,10 +85,14 @@ def main():
     for a in ax:
         a.grid(alpha=0.3)
     h = [Line2D([], [], color=cols[b], lw=1.9, label=rf"$\beta = {b}^\circ$") for b in BETAS]
-    h += [Line2D([], [], color="0.35", lw=1.4, ls=":", label="unloading")]
-    fig.legend(handles=h, loc="upper center", ncol=4, fontsize=9 * FS, frameon=False,
+    if feDir:
+        h += [Line2D([], [], color="0.35", lw=1.9, label="meshfree"),
+              Line2D([], [], color="0.35", lw=1.3, ls="--", label="finite elements")]
+    else:
+        h += [Line2D([], [], color="0.35", lw=1.4, ls=":", label="unloading")]
+    fig.legend(handles=h, loc="upper center", ncol=len(h), fontsize=9 * FS, frameon=False,
                bbox_to_anchor=(0.5, 1.02))
-    fig.suptitle("Unconfined plane-strain compression, paper card, "
+    fig.suptitle("Unconfined plane-strain compression, calibrated card, "
                  + os.environ.get("UC_HLABEL", r"$h_p = l_d = 5$ mm"), fontsize=9.5 * FS, y=0.90)
     fig.tight_layout(rect=(0, 0, 1, 0.86))
     out = os.path.join(HERE, "fig_unconfined_loaddisp.pdf")
@@ -83,6 +104,9 @@ def main():
     for b, sp, ep, se, ee, o, sf, ul in rows:
         print(f"  {b:4d} | {sp:10.2f} {ep:6.2f}  | {se:9.2f} {ee:6.2f} | {o:8.3f} | "
               f"{sf:8.0f} % | {'yes' if ul else 'no'}")
+    for b, sp, ep, se, ee, o in feRows:
+        print(f"  FE {b:4d} | {sp:10.2f} {ep:6.2f}  | {se:9.2f} {ee:6.2f} | {o:8.3f} | "
+              f"{100 * (1 - se / sp):8.0f} %")
 
 
 if __name__ == "__main__":

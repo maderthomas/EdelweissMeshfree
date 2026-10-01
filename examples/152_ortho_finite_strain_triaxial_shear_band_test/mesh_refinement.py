@@ -28,7 +28,8 @@ import numpy as np
 from band_evolution import fastCmap, npzPath, paperStyle  # noqa: F401
 
 HERE = os.path.dirname(os.path.abspath(__file__))
-CASES = [(5.00, "MR5.0_b"), (2.50, "MR2.5_b"), (1.25, "MR1.25_b")]
+_P = os.environ.get("MR_PREFIX", "MR")
+CASES = [(5.00, f"{_P}5.0_b"), (2.50, f"{_P}2.5_b"), (1.25, f"{_P}1.25_b")]
 L_NL = 5.0
 
 
