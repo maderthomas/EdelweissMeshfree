@@ -518,9 +518,9 @@ if __name__ == "__main__":
     ap.add_argument("--confine", type=float, default=30.0)
     ap.add_argument("--umax", type=float, default=6.0)
     ap.add_argument("--inc", type=float, default=0.01)
-    ap.add_argument("--support", type=float, default=1.2)  # nodal kernels; with kernels at the centres >= 1.5 (boundary faces)
+    ap.add_argument("--support", type=float, default=1.5)  # centres: >= 1.5 h for the boundary-face points (CWF)
     ap.add_argument("--cwf", type=int, default=1)
-    ap.add_argument("--kernels", default="nodes", choices=["centres", "nodes"])
+    ap.add_argument("--kernels", default="centres", choices=["centres", "nodes"])  # paper: node at the particle centre
     ap.add_argument("--frame", type=float, default=1.0)
     ap.add_argument("--tangent", type=float, default=0.0)
     ap.add_argument("--ddu-abs", type=float, default=1e-4)
