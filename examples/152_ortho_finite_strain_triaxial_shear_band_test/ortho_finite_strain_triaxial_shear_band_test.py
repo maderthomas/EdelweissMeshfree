@@ -312,6 +312,7 @@ def materialProperties(strengthFactor, frameUpdate):
             float(frameUpdate),                          # 1 = convected frame, 0 = frozen
             OVERRIDES.get("damageOnset", DAMAGE_ONSET),   # alphaP at which damage may start
             OVERRIDES.get("hres", H_RESIDUAL),            # residual hardening slope over [1,2]
+            OVERRIDES.get("tangent", 0.0),                # 0 = analytic tangents, 1 = finite differences
         ]
     )
 
@@ -1061,6 +1062,8 @@ if __name__ == "__main__":
     parser.add_argument("--strain", type=float, default=None, help="nominal shortening target")
     parser.add_argument("--ddu-abs", dest="dduAbs", type=float, default=None,
                         help="absolute displacement-correction tolerance in mm (see run_sim)")
+    parser.add_argument("--tangent", type=float, default=None,
+                        help="material tangents: 0 = analytic (default), 1 = forward finite differences")
     parser.add_argument("--flux-abs", dest="fluxAbs", type=float, default=None,
                         help="absolute flux-residual tolerance of the displacement field in N")
     parser.add_argument("--nl-flux-abs", dest="nlFluxAbs", type=float, default=None,
@@ -1082,7 +1085,7 @@ if __name__ == "__main__":
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
                      ("hres", args.hres), ("As", args.As), ("unload", args.unload),
-                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("fluxAbs", args.fluxAbs)):
+                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent)):
         if val is not None:
             OVERRIDES[key] = val
     if args.strain is not None:
