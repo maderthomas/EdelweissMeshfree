@@ -484,6 +484,15 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     def bc(name, particles, values, **kw):
         return ParticlePenaltyWeakDirichlet(name, theModel, particles, "displacement", values, PEN, **kw)
 
+    # WHERE the platen condition acts.  At the particle CENTRES (the old default) the outer half-cell of
+    # the boundary row is a traction-free strip behind the displacement condition -- the inconsistent
+    # problem the patch test (ex153, bc="center") measures at 2.5 % error in u; it would need the CWF
+    # correction.  At the boundary-FACE vertices the condition acts on the boundary itself and needs none.
+    # Quad vertex order (x,y),(x+1,y),(x+1,y+1),(x,y+1): bottom face = vertices 0,1, top face = 2,3.
+    platenAt = OVERRIDES.get("bcAt", "face")
+    botKw = {"constrain": [0, 1]} if (quad and platenAt == "face") else {}
+    topKw = {"constrain": [2, 3]} if (quad and platenAt == "face") else {}
+
     # one single particle carries u_x = 0: enough to kill the x translation without turning the
     # platen into a rough (confining) one, which smears the damage instead of localising it
     def centreOf(p):
@@ -597,6 +606,22 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     # 1 = bottom, 2 = right, 3 = top, 4 = left.  A NEGATIVE load is compressive (the load is
     # applied along the OUTWARD surface vector), which is checked below by measuring tau_xx.
     distributedLoads = []
+    # CONSISTENT-WEAK-FORM correction on the platens: the penalty acts at the face vertices only, i.e. at
+    # points, and the rational RK shape functions do not reproduce the boundary integral of the traction
+    # from point reactions.  `cwfcorrection` supplies -int N_A t dA with the traction of the particle's own
+    # stress; mask 2 = y only (frictionless platens: the tangential traction is a natural zero condition).
+    # Kept in its own list: it must NOT be latched at a step end like the confinement (it is not a ramped load).
+    cwfLoads = []
+    if quad and platenAt == "face" and OVERRIDES.get("cwf", 1):
+        theModel.surfaces["cwf_platens"] = EntityBasedSurface(
+            "cwf_platens", {1: list(sets["rectangular_grid_bottom"]), 3: list(sets["rectangular_grid_top"])}
+        )
+        cwfLoads.append(
+            ParticleDistributedLoad(
+                "cwf_platens", theModel, journal, theModel.surfaces["cwf_platens"],
+                "cwfcorrection", np.array([2.0]), f_t=lambda t: 1.0,
+            )
+        )
     if confiningPressure > 0.0:
         if not quad:
             raise ValueError(
@@ -629,11 +654,11 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
                 outputManagers=outputManagers,
                 particleManagers=[theParticleManager],
                 constraints=[
-                    bc("botY", bottomParticles, {1: 0.0}),
-                    bc("topY", list(sets["rectangular_grid_top"]), {1: 0.0}),
+                    bc("botY", bottomParticles, {1: 0.0}, **botKw),
+                    bc("topY", list(sets["rectangular_grid_top"]), {1: 0.0}, **topKw),
                     bc("anchorX", anchor, {0: 0.0}),
                 ],
-                particleDistributedLoads=distributedLoads,
+                particleDistributedLoads=distributedLoads + cwfLoads,
                 userIterationOptions=iterationOptions,
             )
         except StepFailed as e:
@@ -679,8 +704,8 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     if mode == "compression":
         journal.message(f"STEP 2 -- compressing to {AXIAL_STRAIN * 100:.0f} % shortening", "step")
         axialBCs = [
-            bc("botY", bottomParticles, {1: 0.0}),
-            bc("topY", list(sets["rectangular_grid_top"]), {1: -uMax}),
+            bc("botY", bottomParticles, {1: 0.0}, **botKw),
+            bc("topY", list(sets["rectangular_grid_top"]), {1: -uMax}, **topKw),
             bc("anchorX", anchor, {0: 0.0}),
         ]
     else:
@@ -724,7 +749,7 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
             outputManagers=outputManagers + [_Recorder()],
             particleManagers=[theParticleManager],
             constraints=axialBCs,
-            particleDistributedLoads=distributedLoads,
+            particleDistributedLoads=distributedLoads + cwfLoads,
             userIterationOptions=iterationOptions,
         )
     except StepFailed as e:
@@ -750,12 +775,12 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
                 outputManagers=outputManagers + [_Recorder()],
                 particleManagers=[theParticleManager],
                 constraints=[
-                    bc("botY_u", bottomParticles, {1: 0.0}),
+                    bc("botY_u", bottomParticles, {1: 0.0}, **botKw),
                     bc("topY_u", list(sets["rectangular_grid_top"]),
-                       {1: +unloadFrac * uMax}),
+                       {1: +unloadFrac * uMax}, **topKw),
                     bc("anchorX_u", anchor, {0: 0.0}),
                 ],
-                particleDistributedLoads=distributedLoads,
+                particleDistributedLoads=distributedLoads + cwfLoads,
                 userIterationOptions=iterationOptions,
             )
         except StepFailed as e:
@@ -1072,6 +1097,9 @@ if __name__ == "__main__":
                         help="absolute flux-residual tolerance of the nonlocal damage field")
     parser.add_argument("--nl-ddu-abs", dest="nlDduAbs", type=float, default=None,
                         help="absolute correction tolerance of the nonlocal damage field (default 1e-8 with --nl-flux-abs)")
+    parser.add_argument("--bc", dest="bcAt", default="face", choices=["face", "center"],
+                        help="platen condition at the boundary-face vertices (default) or the particle centres")
+    parser.add_argument("--cwf", type=int, default=1, help="consistent-weak-form correction on the platens (1/0)")
     parser.add_argument("--tag", default="", help="suffix for the output file names, so several "
                                                  "mesh sizes can be run side by side")
     args = parser.parse_args()
@@ -1089,7 +1117,7 @@ if __name__ == "__main__":
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
                      ("hres", args.hres), ("As", args.As), ("unload", args.unload),
-                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("nlDduAbs", args.nlDduAbs), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent)):
+                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("nlDduAbs", args.nlDduAbs), ("bcAt", args.bcAt), ("cwf", args.cwf), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent)):
         if val is not None:
             OVERRIDES[key] = val
     if args.strain is not None:

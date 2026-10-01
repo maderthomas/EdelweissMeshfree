@@ -178,13 +178,23 @@ def boundaryFaces(m, tol=1e-7):
     return out
 
 
+def hexVolume(X):
+    """volume of a (possibly warped) hexahedron, divergence theorem over its six faces"""
+    v = 0.0
+    for vs in HEX_FACES.values():
+        F = X[list(vs)]
+        v += np.dot(F.mean(axis=0), 0.5 * np.cross(F[2] - F[0], F[3] - F[1]))
+    return v / 3.0
+
+
 def faceArea(V):
     """Area of a (possibly warped) quad from its diagonals."""
     return 0.5 * np.linalg.norm(np.cross(V[2] - V[0], V[3] - V[1]))
 
 
 def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, frameUpdate=1.0,
-            supportFactor=2.0, tangent=0.0, dduAbs=1e-4, fluxAbs=None, nlFluxAbs=1e-8, inc=0.01):
+            supportFactor=1.2, tangent=0.0, dduAbs=1e-4, fluxAbs=None, nlFluxAbs=1e-8, inc=0.01,
+            completeness=1, continuity=2, cwf=True):
     np.set_printoptions(linewidth=200, precision=4)
     dimension = 3
     tag = tag or f"hc_b{int(beta)}_s{int(confine)}_h{h:g}"
@@ -205,12 +215,13 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
     journal.message(
         f"{tag}: beta = {beta} deg, t_conf = {confine} MPa, target h = {h} mm "
         f"(nC={m.nC} nR={m.nR} nX={m.nX}), {nEl} hexa particles, {len(seed)} seed, "
-        f"edge 90 % = {hRef:.2f} mm, max {edge.max():.2f} mm, support {support:.2f} mm",
+        f"edge 90 % = {hRef:.2f} mm, max {edge.max():.2f} mm, support {support:.2f} mm (half-width), "
+        f"completeness {completeness}, kernel continuity {continuity}",
         "setup",
     )
 
     theApproximation = MarmotMeshfreeApproximationWrapper(
-        "ReproducingKernelImplicitGradient", dimension, completenessOrder=1
+        "ReproducingKernelImplicitGradient", dimension, completenessOrder=completeness
     )
     cards = {
         f: {"material": "GRADIENTENHANCEDORTHOCDPFINITESTRAIN",
@@ -229,7 +240,7 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
         theModel.particles[number] = p
         particles.append(p)
         kf = MarmotMeshfreeKernelFunctionWrapper(
-            Node(number, centre.copy()), "BSplineBoxed", supportRadius=support, continuityOrder=2
+            Node(number, centre.copy()), "BSplineBoxed", supportRadius=support, continuityOrder=continuity
         )
         theModel.meshfreeKernelFunctions[number] = kf
         theModel.nodes[number] = kf.node
@@ -277,15 +288,33 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
         ParticlePenaltyWeakDirichlet("pinY", theModel, pin, "displacement", {1: 0.0}, PEN)
     ]
 
-    loads = []
+    loads, loadsTop = [], []
     if confine > 0.0:
         # one surface per (group, faceID): a face ID may occur in both groups
         for grp in ("lateral", "top"):
             for fid, es in faces[grp].items():
                 sname = f"conf_{grp}_{fid}"
                 theModel.surfaces[sname] = EntityBasedSurface(sname, {fid: [particles[e] for e in es]})
-                loads.append(ParticleDistributedLoad(sname, theModel, journal, theModel.surfaces[sname],
+                (loadsTop if grp == "top" else loads).append(ParticleDistributedLoad(sname, theModel, journal, theModel.surfaces[sname],
                                                      "pressure", np.array([-confine])))
+
+    # CONSISTENT-WEAK-FORM correction on the faces whose displacement is prescribed: the penalty acts at the
+    # face vertices only, and the rational RK shape functions do not reproduce the boundary integral of the
+    # traction from point reactions.  Only the prescribed component is corrected (mask: 1 = x, 4 = z); the
+    # tangential traction there is a natural zero condition.  Not latched at a step end (not a ramped load).
+    cwfLoads, cwfTop = [], []
+    if cwf:
+        for grp, mask in (("bottom", 1.0), ("top", 1.0), ("sym", 4.0)):
+            for fid, es in faces[grp].items():
+                sname = f"cwf_{grp}_{fid}"
+                theModel.surfaces[sname] = EntityBasedSurface(sname, {fid: [particles[e] for e in es]})
+                # the top face is free (pressure only) in the confinement step; its correction comes with the
+                # prescribed axial displacement of step 2
+                if grp == "top" and os.environ.get("HC_NOTOPCWF"):
+                    continue
+                (cwfTop if grp == "top" else cwfLoads).append(
+                    ParticleDistributedLoad(sname, theModel, journal, theModel.surfaces[sname],
+                                            "cwfcorrection", np.array([mask]), f_t=lambda t: 1.0))
 
     iterationOptions = {
         "max. iterations": 40,
@@ -315,6 +344,19 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
     ref = {"u0": None}
     topBCs = []
 
+    vol0 = np.array([hexVolume(m.coords[el]) for el in els])
+
+    def topForce(vd, tau):
+        """axial force on the top faces from the particles' own Cauchy stress, sigma = tau / J, J = V / V0"""
+        Fx = 0.0
+        for e, fid in topFaces:
+            X = m.coords[els[e]] + vd[e]
+            J = hexVolume(X) / vol0[e]
+            V = X[list(HEX_FACES[fid])]
+            nda = 0.5 * np.cross(V[2] - V[0], V[3] - V[1])
+            Fx += (tau[e] @ nda)[0] / J
+        return Fx
+
     def topArea(vd):
         return sum(faceArea(m.coords[els[e]][list(HEX_FACES[fid])] + vd[e][list(HEX_FACES[fid])])
                    for e, fid in topFaces)
@@ -327,11 +369,14 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
             ref["u0"] = uTop
         tau = f["stress"].getLastResult().reshape(-1, 3, 3)
         omega = f["omega"].getLastResult().reshape(-1).copy()
-        R = sum(c.penaltyForce[0] for c in topBCs) if topBCs else 0.0
+        Rpen = sum(c.penaltyForce[0] for c in topBCs) if topBCs else 0.0
         A = topArea(vd)
+        # force carried in addition to the confinement: -F_x(top) - p A(t); with CWF the traction sits in the
+        # correction term and the penalty force is NOT the reaction any more
+        R = -topForce(vd, tau) - confine * A
         history.append((-(uTop - ref["u0"]) / HEIGHT, R, A, float(omega.max()),
                         float(f["frameRotation"].getLastResult().max()),
-                        float(tau[midSlab, 0, 0].mean()), float(tau[:, 1, 1].mean()), theModel.time))
+                        float(tau[midSlab, 0, 0].mean()), float(tau[:, 1, 1].mean()), theModel.time, Rpen))
         snapshots.append(dict(vd=vd.copy(), omega=omega,
                               alphaP=f["alphaP"].getLastResult().reshape(-1).copy(),
                               frameRotation=f["frameRotation"].getLastResult().reshape(-1).copy(),
@@ -361,15 +406,15 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
             pass
 
     t0 = time.time()
-    if loads:
+    if loads or loadsTop:
         journal.message(f"STEP 1 -- confining pressure {confine} MPa", "step")
         solver.solveStep(
             AdaptiveTimeStepper(theModel.time, 1.0, 0.25, 0.5, 1e-3, 100, journal),
             linearSolver, theModel, fo, outputManagers=outputManagers,
             particleManagers=[particleManager], constraints=fixed,
-            particleDistributedLoads=loads, userIterationOptions=iterationOptions,
+            particleDistributedLoads=loads + loadsTop + cwfLoads, userIterationOptions=iterationOptions,
         )
-        for dl in loads:
+        for dl in loads + loadsTop:
             dl.applyAtStepEnd(theModel)  # latch (see ex152): the meshfree NQS does not
         tau = fo.fieldOutputs["stress"].getLastResult().reshape(-1, 3, 3)
         journal.message(f"confinement latched: mean tau_xx {tau[:, 0, 0].mean():.3f}, tau_yy "
@@ -387,7 +432,8 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
             AdaptiveTimeStepper(theModel.time, 1.0, inc, 4.0 * inc, 1e-5, 2000, journal),
             linearSolver, theModel, fo, outputManagers=outputManagers + [_Recorder()],
             particleManagers=[particleManager], constraints=fixed + topBCs,
-            particleDistributedLoads=loads, userIterationOptions=iterationOptions,
+            particleDistributedLoads=loads + cwfLoads + cwfTop + ([] if (cwf and cwfTop) else loadsTop),
+            userIterationOptions=iterationOptions,
         )
     except StepFailed as e:
         journal.message(f"step stopped early: {e}", "warning")
@@ -427,15 +473,19 @@ if __name__ == "__main__":
     ap.add_argument("--confine", type=float, default=30.0)
     ap.add_argument("--umax", type=float, default=6.0)
     ap.add_argument("--inc", type=float, default=0.01)
-    ap.add_argument("--support", type=float, default=2.0)
+    ap.add_argument("--support", type=float, default=1.2)
+    ap.add_argument("--cwf", type=int, default=1)
     ap.add_argument("--frame", type=float, default=1.0)
     ap.add_argument("--tangent", type=float, default=0.0)
     ap.add_argument("--ddu-abs", type=float, default=1e-4)
     ap.add_argument("--flux-abs", type=float, default=None)
     ap.add_argument("--nl-flux-abs", type=float, default=1e-8)
+    ap.add_argument("--completeness", type=int, default=1)
+    ap.add_argument("--continuity", type=int, default=2, help="B-spline kernel: 2 = cubic (C2), 3 = quartic (C3)")
     ap.add_argument("--no-ensight", action="store_true")
     ap.add_argument("--tag", default=None)
     a = ap.parse_args()
     run_sim(beta=a.beta, h=a.h, confine=a.confine, umax=a.umax, tag=a.tag, ensight=not a.no_ensight,
             frameUpdate=a.frame, supportFactor=a.support, tangent=a.tangent, dduAbs=a.ddu_abs,
-            fluxAbs=a.flux_abs, nlFluxAbs=a.nl_flux_abs, inc=a.inc)
+            fluxAbs=a.flux_abs, nlFluxAbs=a.nl_flux_abs, inc=a.inc, completeness=a.completeness,
+            continuity=a.continuity, cwf=bool(a.cwf))
