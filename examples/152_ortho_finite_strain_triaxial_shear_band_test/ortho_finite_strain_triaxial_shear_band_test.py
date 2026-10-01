@@ -531,7 +531,7 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         iterationOptions.setdefault("spec. absolute flux residual tolerances", {})["nonlocal damage"] = OVERRIDES["nlFluxAbs"]
         # ... and the same for its CORRECTION (field values ~1e-3; noise ~5e-9), which the relative
         # criterion cannot meet either while the source is still ~0
-        iterationOptions.setdefault("spec. absolute field correction tolerances", {})["nonlocal damage"] = 1e-8
+        iterationOptions.setdefault("spec. absolute field correction tolerances", {})["nonlocal damage"] = OVERRIDES.get("nlDduAbs") or 1e-8
     linearSolver = getLinSolverByName("pardiso", {})
     nonlinearSolver = NonlinearQuasistaticSolver(journal)
 
@@ -1068,6 +1068,8 @@ if __name__ == "__main__":
                         help="absolute flux-residual tolerance of the displacement field in N")
     parser.add_argument("--nl-flux-abs", dest="nlFluxAbs", type=float, default=None,
                         help="absolute flux-residual tolerance of the nonlocal damage field")
+    parser.add_argument("--nl-ddu-abs", dest="nlDduAbs", type=float, default=None,
+                        help="absolute correction tolerance of the nonlocal damage field (default 1e-8 with --nl-flux-abs)")
     parser.add_argument("--tag", default="", help="suffix for the output file names, so several "
                                                  "mesh sizes can be run side by side")
     args = parser.parse_args()
@@ -1085,7 +1087,7 @@ if __name__ == "__main__":
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
                      ("hres", args.hres), ("As", args.As), ("unload", args.unload),
-                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent)):
+                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("nlDduAbs", args.nlDduAbs), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent)):
         if val is not None:
             OVERRIDES[key] = val
     if args.strain is not None:
