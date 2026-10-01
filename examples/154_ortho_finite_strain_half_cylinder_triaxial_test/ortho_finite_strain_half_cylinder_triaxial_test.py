@@ -194,7 +194,7 @@ def faceArea(V):
 
 def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, frameUpdate=1.0,
             supportFactor=1.5, tangent=0.0, dduAbs=1e-4, fluxAbs=None, nlFluxAbs=1e-8, inc=0.01,
-            completeness=1, continuity=2, cwf=True):
+            completeness=1, continuity=2, cwf=True, kernelsAt="centres"):
     np.set_printoptions(linewidth=200, precision=4)
     dimension = 3
     tag = tag or f"hc_b{int(beta)}_s{int(confine)}_h{h:g}"
@@ -239,17 +239,28 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
                                   cards[SEED_SCALE if e in seed else 1.0])
         theModel.particles[number] = p
         particles.append(p)
-        kf = MarmotMeshfreeKernelFunctionWrapper(
-            Node(number, centre.copy()), "BSplineBoxed", supportRadius=support, continuityOrder=continuity
-        )
-        theModel.meshfreeKernelFunctions[number] = kf
-        theModel.nodes[number] = kf.node
+        if kernelsAt == "centres":
+            kf = MarmotMeshfreeKernelFunctionWrapper(
+                Node(number, centre.copy()), "BSplineBoxed", supportRadius=support, continuityOrder=continuity
+            )
+            theModel.meshfreeKernelFunctions[number] = kf
+            theModel.nodes[number] = kf.node
+    # kernels at the mesh NODES (incl. the boundary nodes): every evaluation point -- particle centre, face
+    # centre -- lies inside a cell surrounded by its corner nodes, so a support of ~1.2 h suffices; at the
+    # particle centres the boundary-face points lie outside the outermost kernel row and need >= 1.5 h
+    if kernelsAt == "nodes":
+        for k, X in enumerate(m.coords):
+            kf = MarmotMeshfreeKernelFunctionWrapper(
+                Node(k + 1, X.copy()), "BSplineBoxed", supportRadius=support, continuityOrder=continuity
+            )
+            theModel.meshfreeKernelFunctions[k + 1] = kf
+            theModel.nodes[k + 1] = kf.node
     theModel.particleSets["cyl_all"] = ParticleSet("cyl_all", particles)
 
     domain = ParticleKernelDomain(particles, list(theModel.meshfreeKernelFunctions.values()))
     theModel.particleKernelDomains["all_with_all"] = domain
     particleManager = KDBinOrganizedParticleManager(domain, dimension, journal,
-                                                    bondParticlesToKernelFunctions=True)
+                                                    bondParticlesToKernelFunctions=(kernelsAt == "centres"))
     theModel.prepareYourself(journal)
     journal.printPrettyTable(theModel.makePrettyTableSummary(), "summary")
 
@@ -386,6 +397,40 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
                         f"t_dev true {R / A:7.2f}  nominal {R / A0_HALF:7.2f} MPa  omega_max {h_[3]:.4f}  "
                         f"R^p_max {h_[4]:.2f} deg", "record")
 
+    # semi-Lagrangian update of NODAL kernels: after every converged increment each kernel moves to the mean
+    # current position of the smoothing-domain vertices that share its node (the particle manager only
+    # carries kernels bonded one-to-one to particles along)
+    nodeUses = [[] for _ in range(len(m.coords))]
+    for e, el in enumerate(els):
+        for a, n in enumerate(el):
+            nodeUses[n].append((e, a))
+    kfs = [theModel.meshfreeKernelFunctions[k + 1] for k in range(len(m.coords))] if kernelsAt == "nodes" else []
+
+    class _KernelMover:
+        def initializeJob(self):
+            pass
+
+        def initializeStep(self, *a, **kw):
+            pass
+
+        def finalizeIncrement(self, *a, **kw):
+            vd = fo.fieldOutputs["vertex displacements"].getLastResult().reshape(nEl, 8, 3)
+            for k, kf in enumerate(kfs):
+                x = m.coords[k] + np.mean([vd[e][a] for e, a in nodeUses[k]], axis=0)
+                kf.moveTo(np.ascontiguousarray(x))
+            particleManager.signalizeKernelFunctionUpdate()
+
+        def finalizeFailedIncrement(self, *a, **kw):
+            pass
+
+        def finalizeStep(self, *a, **kw):
+            pass
+
+        def finalizeJob(self):
+            pass
+
+    movers = [_KernelMover()] if kernelsAt == "nodes" else []
+
     class _Recorder:
         def initializeJob(self):
             pass
@@ -410,7 +455,7 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
         journal.message(f"STEP 1 -- confining pressure {confine} MPa", "step")
         solver.solveStep(
             AdaptiveTimeStepper(theModel.time, 1.0, 0.25, 0.5, 1e-3, 100, journal),
-            linearSolver, theModel, fo, outputManagers=outputManagers,
+            linearSolver, theModel, fo, outputManagers=outputManagers + movers,
             particleManagers=[particleManager], constraints=fixed,
             particleDistributedLoads=loads + loadsTop + cwfLoads, userIterationOptions=iterationOptions,
         )
@@ -430,7 +475,7 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
     try:
         solver.solveStep(
             AdaptiveTimeStepper(theModel.time, 1.0, inc, 4.0 * inc, 1e-5, 2000, journal),
-            linearSolver, theModel, fo, outputManagers=outputManagers + [_Recorder()],
+            linearSolver, theModel, fo, outputManagers=outputManagers + movers + [_Recorder()],
             particleManagers=[particleManager], constraints=fixed + topBCs,
             particleDistributedLoads=loads + cwfLoads + cwfTop + ([] if (cwf and cwfTop) else loadsTop),
             userIterationOptions=iterationOptions,
@@ -473,8 +518,9 @@ if __name__ == "__main__":
     ap.add_argument("--confine", type=float, default=30.0)
     ap.add_argument("--umax", type=float, default=6.0)
     ap.add_argument("--inc", type=float, default=0.01)
-    ap.add_argument("--support", type=float, default=1.5)  # 1.2h: near-singular RK at the boundary faces with CWF
+    ap.add_argument("--support", type=float, default=1.2)  # nodal kernels; with kernels at the centres >= 1.5 (boundary faces)
     ap.add_argument("--cwf", type=int, default=1)
+    ap.add_argument("--kernels", default="nodes", choices=["centres", "nodes"])
     ap.add_argument("--frame", type=float, default=1.0)
     ap.add_argument("--tangent", type=float, default=0.0)
     ap.add_argument("--ddu-abs", type=float, default=1e-4)
@@ -488,4 +534,4 @@ if __name__ == "__main__":
     run_sim(beta=a.beta, h=a.h, confine=a.confine, umax=a.umax, tag=a.tag, ensight=not a.no_ensight,
             frameUpdate=a.frame, supportFactor=a.support, tangent=a.tangent, dduAbs=a.ddu_abs,
             fluxAbs=a.flux_abs, nlFluxAbs=a.nl_flux_abs, inc=a.inc, completeness=a.completeness,
-            continuity=a.continuity, cwf=bool(a.cwf))
+            continuity=a.continuity, cwf=bool(a.cwf), kernelsAt=a.kernels)
