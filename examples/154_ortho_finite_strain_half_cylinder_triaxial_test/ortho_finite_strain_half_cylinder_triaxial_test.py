@@ -268,7 +268,7 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
     fo = MPMFieldOutputController(theModel, journal)
     allSet = theModel.particleSets["all"]
     for name in ("displacement", "stress", "omega", "alphaP", "frameRotation", "materialAxis1",
-                 "materialAxis2"):
+                 "materialAxis2", "nonlocal damage", "alphaD"):
         fo.addPerParticleFieldOutput(name, allSet, name)
     fo.addPerParticleFieldOutput("vertex displacements", allSet, "vertex displacements",
                                  f_x=lambda x: np.reshape(x, (-1, 3)))
@@ -391,7 +391,9 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
         snapshots.append(dict(vd=vd.copy(), omega=omega,
                               alphaP=f["alphaP"].getLastResult().reshape(-1).copy(),
                               frameRotation=f["frameRotation"].getLastResult().reshape(-1).copy(),
-                              axis1=f["materialAxis1"].getLastResult().reshape(-1, 3).copy()))
+                              axis1=f["materialAxis1"].getLastResult().reshape(-1, 3).copy(),
+                              alphaNL=f["nonlocal damage"].getLastResult().reshape(-1).copy(),
+                              alphaD=f["alphaD"].getLastResult().reshape(-1).copy()))
         h_ = history[-1]
         journal.message(f"  shortening {h_[0] * 100:6.3f} %  dF {2 * R / 1000:8.3f} kN (full)  "
                         f"t_dev true {R / A:7.2f}  nominal {R / A0_HALF:7.2f} MPa  omega_max {h_[3]:.4f}  "
@@ -499,6 +501,7 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
         alphaP=np.array([s["alphaP"] for s in snapshots]),
         frameRotation=np.array([s["frameRotation"] for s in snapshots]),
         axis1=np.array([s["axis1"] for s in snapshots]),
+        alphaNL=np.array([s["alphaNL"] for s in snapshots]), alphaD=np.array([s["alphaD"] for s in snapshots]),
         beta=beta, confine=confine, h=h, A0half=A0_HALF, stepFailed=stepFailed, wall=time.time() - t0,
     )
     tdev = hist[:, 1] / hist[:, 2]
