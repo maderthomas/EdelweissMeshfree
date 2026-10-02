@@ -192,6 +192,47 @@ def faceArea(V):
     return 0.5 * np.linalg.norm(np.cross(V[2] - V[0], V[3] - V[1]))
 
 
+def rkDefect(m, kernelCentres, support, continuity, completeness):
+    """Largest defect of the RK shape functions over all points a particle evaluates them at -- the face centres
+    (smoothed gradient, CWF, pressure), the vertices (penalty platens) and the centre: max of the partition-of-
+    unity error and of the linear-reproduction error / support.  A point that sees kernels in a single plane only
+    has a singular moment matrix, and the 'shape functions' there are garbage (sum 0.14 instead of 1)."""
+    from scipy.spatial import cKDTree
+
+    appr = MarmotMeshfreeApproximationWrapper("ReproducingKernelImplicitGradient", 3, completenessOrder=completeness)
+    kfs = [MarmotMeshfreeKernelFunctionWrapper(Node(k + 1, np.array(X, dtype=float)), "BSplineBoxed",
+                                               supportRadius=support, continuityOrder=continuity)
+           for k, X in enumerate(kernelCentres)]
+    pts = []
+    for el in m.elements:
+        X = m.coords[el]
+        pts += [X, X.mean(axis=0)[None]] + [X[list(vs)].mean(axis=0)[None] for vs in HEX_FACES.values()]
+    pts = np.unique(np.round(np.vstack(pts), 9), axis=0)
+    tree = cKDTree(kernelCentres)
+    worst = 0.0
+    for x, idx in zip(pts, tree.query_ball_point(pts, r=support, p=np.inf)):
+        if len(idx) < 4:
+            return np.inf
+        N = appr.computeShapeFunctions(np.ascontiguousarray(x), [kfs[i] for i in idx])
+        worst = max(worst, abs(N.sum() - 1.0), np.abs(N @ kernelCentres[idx] - x).max() / support)
+    return worst
+
+
+def regularSupport(m, kernelCentres, supportFactor, hRef, continuity, completeness, margin=0.95, tol=1e-8):
+    """The smallest support factor >= supportFactor (in steps of 0.05) whose RK shape functions are regular at every
+    evaluation point even with the support shrunk to margin x support.  With the kernels at the particle centres a
+    boundary face lies 0.5 h outside the outermost kernel layer and 1.5 h from the next one: a support of exactly
+    1.5 h (h = 5: hRef = layer spacing = 5.00 mm, support 7.50 mm) gives that layer ZERO weight on the top and
+    bottom faces, the moment matrix there is singular, and the prescribed top displacement then drives a
+    spurious mode (top layer stretched and damaged, the rest over-compressed)."""
+    f = supportFactor
+    while rkDefect(m, kernelCentres, margin * f * hRef, continuity, completeness) > tol:
+        f = round(f + 0.05, 10)
+        if f > 4.0 * supportFactor:
+            raise ValueError("no regular RK support found")
+    return f
+
+
 def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, frameUpdate=1.0,
             supportFactor=1.5, tangent=0.0, dduAbs=1e-4, fluxAbs=None, nlFluxAbs=1e-8, inc=0.01,
             completeness=1, continuity=2, cwf=True, kernelsAt="centres"):
@@ -211,7 +252,13 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
              for a, b in ((0, 1), (1, 2), (2, 3), (3, 0), (0, 4))) for el in els]
     )
     hRef = float(np.percentile(edge, 90))
-    support = supportFactor * hRef
+    kernelCentres = (np.array([m.coords[el].mean(axis=0) for el in els]) if kernelsAt == "centres"
+                     else np.asarray(m.coords, dtype=float))
+    supportFactorUsed = regularSupport(m, kernelCentres, supportFactor, hRef, continuity, completeness)
+    if supportFactorUsed != supportFactor:
+        journal.message(f"support {supportFactor} x hRef is (near-)singular for the RK shape functions at the "
+                        f"boundary-face points; using {supportFactorUsed} x hRef", "warning")
+    support = supportFactorUsed * hRef
     journal.message(
         f"{tag}: beta = {beta} deg, t_conf = {confine} MPa, target h = {h} mm "
         f"(nC={m.nC} nR={m.nR} nX={m.nX}), {nEl} hexa particles, {len(seed)} seed, "
@@ -247,7 +294,7 @@ def run_sim(beta=45.0, h=5.0, confine=30.0, umax=6.0, tag=None, ensight=True, fr
             theModel.nodes[number] = kf.node
     # kernels at the mesh NODES (incl. the boundary nodes): every evaluation point -- particle centre, face
     # centre -- lies inside a cell surrounded by its corner nodes, so a support of ~1.2 h suffices; at the
-    # particle centres the boundary-face points lie outside the outermost kernel row and need >= 1.5 h
+    # particle centres the boundary-face points lie outside the outermost kernel row and need > 1.5 h (strictly)
     if kernelsAt == "nodes":
         for k, X in enumerate(m.coords):
             kf = MarmotMeshfreeKernelFunctionWrapper(
@@ -521,7 +568,7 @@ if __name__ == "__main__":
     ap.add_argument("--confine", type=float, default=30.0)
     ap.add_argument("--umax", type=float, default=6.0)
     ap.add_argument("--inc", type=float, default=0.01)
-    ap.add_argument("--support", type=float, default=1.5)  # centres: >= 1.5 h for the boundary-face points (CWF)
+    ap.add_argument("--support", type=float, default=1.5)  # minimum; raised until the RK is regular at all face points
     ap.add_argument("--cwf", type=int, default=1)
     ap.add_argument("--kernels", default="centres", choices=["centres", "nodes"])  # paper: node at the particle centre
     ap.add_argument("--frame", type=float, default=1.0)
