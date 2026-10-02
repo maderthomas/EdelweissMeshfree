@@ -172,6 +172,32 @@ from edelweissmeshfree.particles.marmot.marmotparticlewrapper import (
 )
 from edelweissmeshfree.solvers.nqs import NonlinearQuasistaticSolver
 
+class TopFaceTraction(ParticlePenaltyWeakDirichlet):
+    """A uniform TANGENTIAL (x) traction on the top face of the top particles, as a dead load.
+
+    No traction load type exists for the SQCNI particle (only pressure and the CWF correction), so the
+    traction is integrated over each top face with the two-point end-point (trapezoidal) rule at the face
+    VERTICES 2 and 3 -- the same points the platen penalty acts on -- and lumped onto the kernel nodes with
+    the RK shape functions there: P_A -= Phi_A(x_v) t_x(t) * (face length / 2).  By the partition of unity the
+    resultant is exactly t_x * W.  t_x(t) = tEnd * stepProgress, i.e. proportional to the prescribed axial
+    displacement.  Reuses the penalty constraint for the node bookkeeping, with zero stiffness.
+    """
+
+    def __init__(self, name, model, particles, tEnd, faceLength):
+        super().__init__(name, model, particles, "displacement", {0: 0.0}, 0.0, constrain=[2, 3])
+        self._tEnd = tEnd
+        self._halfFace = 0.5 * faceLength
+
+    def applyConstraint(self, dU, PExt, V, timeStep):
+        P_x = PExt[0 :: self._fieldSize]
+        tx = self._tEnd * timeStep.stepProgress
+        for p in self._constrainedParticles:
+            nodeIdcs = [self._nodes[kf.node] for kf in p.kernelFunctions]
+            for x in p.getVertexCoordinates()[self._constrainVertices]:
+                P_x[nodeIdcs] -= p.getInterpolationVector(x) * tx * self._halfFace
+        self.penaltyForce[0] = tx * self._halfFace * 2 * len(self._constrainedParticles)
+
+
 # =============================================================================================
 #  material card -- the calibrated Sect.-4 set (Mader et al., Acta Mechanica 2023)
 # =============================================================================================
@@ -294,7 +320,7 @@ OVERRIDES = {}  # set from the CLI: softMod, maxDmg, l, m
 
 
 def materialProperties(strengthFactor, frameUpdate):
-    """The 33-property card.  ``strengthFactor`` scales the four strengths (caps / seed)."""
+    """The 33-property card.  ``strengthFactor`` scales the four strengths (caps / seed / random field)."""
     phi = math.radians(BEDDING_PHI_DEG)
     return np.array(
         [
@@ -352,8 +378,10 @@ def strengthFactorAt(x, y, seed="patch"):
         perfect plasticity, and the band width is set by l, not by the slab, which is what makes
         the mesh study mean something.
     """
-    if y < capDepth() or y > HEIGHT - capDepth():
+    if OVERRIDES.get("caps", 1) and (y < capDepth() or y > HEIGHT - capDepth()):
         return CAP_FACTOR
+    if seed == "none":
+        return 1.0
     if seed == "slab":
         th = math.radians(SLAB_ANGLE_DEG)
         # signed distance from the slab's mid-line through the specimen centre
@@ -424,12 +452,30 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         for f in (1.0, CAP_FACTOR, SEED_FACTOR, SLAB_FACTOR)
     }
 
+    # RANDOM STRENGTH FIELD (--rf-cov > 0): a correlated Gaussian field s(x) = 1 + cov g(x), evaluated at the
+    # particle CENTRE with the same closed-form function (ps_random_field.py, identical copy in the FE driver
+    # folder) that the FE driver evaluates at the element centroids.  It multiplies ALL FOUR strengths, on top
+    # of any zone factor: scaling fcu (and fcy) alone is not admissible for this card, since fbu/fcu = 1.03 and
+    # the eccentricity e(fbu/fcu, ftu/fcu) of the deviatoric section drops below 1/2 as soon as fcu exceeds fbu,
+    # i.e. for s > 1.03.  Scaling all four keeps e, m0 and fcy/fcu, so only the SIZE of the yield surface varies.
+    rfCov = OVERRIDES.get("rfCov", 0.0)
+    if rfCov > 0.0:
+        from ps_random_field import strength_factor
+
     def theParticleFactory(number, coordinates, volume):
         c = np.asarray(coordinates).reshape(-1, 2).mean(axis=0)  # centre, from centre or vertices
-        return MarmotParticleWrapper(
-            pName, number, coordinates, volume, theApproximation,
-            cards[strengthFactorAt(c[0], c[1], seed)],
-        )
+        f = strengthFactorAt(c[0], c[1], seed)
+        if rfCov > 0.0:
+            s = float(strength_factor(c[None, :], rfCov, OVERRIDES.get("rfLc", 2.5),
+                                      int(OVERRIDES.get("rfSeed", 20261002)))[0])
+            rfFactors[number] = s
+            card = {"material": "GRADIENTENHANCEDORTHOCDPFINITESTRAIN",
+                    "properties": materialProperties(f * s, frameUpdate)}
+        else:
+            card = cards[f]
+        return MarmotParticleWrapper(pName, number, coordinates, volume, theApproximation, card)
+
+    rfFactors = {}
 
     generator = generateRectangularQuadParticleGrid if quad else generateRectangularParticleGrid
     theModel = generator(
@@ -501,6 +547,8 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     bottomParticles = list(sets["rectangular_grid_bottom"])
     xyBottom = np.array([centreOf(p) for p in bottomParticles])
     anchor = [bottomParticles[int(np.argmin(np.abs(xyBottom[:, 0] - 0.5 * WIDTH)))]]
+    # --bottom fixed: the bottom face is held in BOTH directions (rough platen / glued base), no anchor
+    bottomFixed = OVERRIDES.get("bottom", "frictionless") == "fixed"
 
     # Solver leash.  The wall is Newton divergence ("residual grew 3 times, cutting back") at
     # the PLASTIC limit point -- alphaP ~ 1.2 with omega still ~2e-4, so it is not the damage
@@ -612,7 +660,7 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     # stress; mask 2 = y only (frictionless platens: the tangential traction is a natural zero condition).
     # Kept in its own list: it must NOT be latched at a step end like the confinement (it is not a ramped load).
     cwfLoads = []
-    if quad and platenAt == "face" and OVERRIDES.get("cwf", 1):
+    if quad and platenAt == "face" and OVERRIDES.get("cwf", 1) and not bottomFixed:
         theModel.surfaces["cwf_platens"] = EntityBasedSurface(
             "cwf_platens", {1: list(sets["rectangular_grid_bottom"]), 3: list(sets["rectangular_grid_top"])}
         )
@@ -622,6 +670,16 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
                 "cwfcorrection", np.array([2.0]), f_t=lambda t: 1.0,
             )
         )
+    elif quad and platenAt == "face" and OVERRIDES.get("cwf", 1):
+        # fully held bottom face: BOTH components are prescribed there -> mask 0 (all components);
+        # top face: u_y prescribed, u_x free -> mask 2 (y only), as before
+        for nm, face, ps, mask in (("cwf_bottom", 1, sets["rectangular_grid_bottom"], 0.0),
+                                   ("cwf_top", 3, sets["rectangular_grid_top"], 2.0)):
+            theModel.surfaces[nm] = EntityBasedSurface(nm, {face: list(ps)})
+            cwfLoads.append(
+                ParticleDistributedLoad(nm, theModel, journal, theModel.surfaces[nm],
+                                        "cwfcorrection", np.array([mask]), f_t=lambda t: 1.0)
+            )
     if confiningPressure > 0.0:
         if not quad:
             raise ValueError(
@@ -703,11 +761,23 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     uMax = ( AXIAL_STRAIN * HEIGHT if mode == "compression" else SHEAR_STRAIN * HEIGHT )
     if mode == "compression":
         journal.message(f"STEP 2 -- compressing to {AXIAL_STRAIN * 100:.0f} % shortening", "step")
-        axialBCs = [
-            bc("botY", bottomParticles, {1: 0.0}, **botKw),
-            bc("topY", list(sets["rectangular_grid_top"]), {1: -uMax}, **topKw),
-            bc("anchorX", anchor, {0: 0.0}),
-        ]
+        if bottomFixed:
+            axialBCs = [
+                bc("botXY", bottomParticles, {0: 0.0, 1: 0.0}, **botKw),
+                bc("topY", list(sets["rectangular_grid_top"]), {1: -uMax}, **topKw),
+            ]
+        else:
+            axialBCs = [
+                bc("botY", bottomParticles, {1: 0.0}, **botKw),
+                bc("topY", list(sets["rectangular_grid_top"]), {1: -uMax}, **topKw),
+                bc("anchorX", anchor, {0: 0.0}),
+            ]
+        # HORIZONTAL PERTURBATION LOAD (--htrac): a uniform tangential traction t_x on the top face, a dead
+        # load on the reference face, PROPORTIONAL TO THE PRESCRIBED AXIAL DISPLACEMENT:
+        # t_x = htrac * eps_nominal [MPa], i.e. htrac * AXIAL_STRAIN at the end of the step.
+        if OVERRIDES.get("htrac"):
+            axialBCs.append(TopFaceTraction("topTx", theModel, list(sets["rectangular_grid_top"]),
+                                            OVERRIDES["htrac"] * AXIAL_STRAIN, WIDTH / nX))
     else:
         journal.message(f"STEP 2 -- shearing to gamma = {SHEAR_STRAIN:.2f}", "step")
         axialBCs = [
@@ -809,6 +879,7 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         confiningPressure=confiningPressure,
         stepFailed=stepFailed,
         frameUpdate=frameUpdate,
+        rf=np.array([rfFactors.get(p.number, 1.0) for p in sets["all"]]) if rfFactors else None,
     )
 
 
@@ -1055,7 +1126,7 @@ if __name__ == "__main__":
                              "The calibrated 15 makes xs ~ 16 in compression and damage crawl; "
                              "0.5-2 makes compression damage properly and leaves the peak intact")
     parser.add_argument("--lnl", type=float, default=None, help="nonlocal length l in mm")
-    parser.add_argument("--seed", choices=("slab", "patch"), default="patch",
+    parser.add_argument("--seed", choices=("slab", "patch", "none"), default="patch",
                         help="patch = one small weak square at mid-height on the left edge "
                              "(default; with As = 2 this localises cleanly); slab = a "
                              "fixed-width inclined weak slab, which does not help here")
@@ -1100,6 +1171,17 @@ if __name__ == "__main__":
     parser.add_argument("--bc", dest="bcAt", default="face", choices=["face", "center"],
                         help="platen condition at the boundary-face vertices (default) or the particle centres")
     parser.add_argument("--cwf", type=int, default=1, help="consistent-weak-form correction on the platens (1/0)")
+    parser.add_argument("--caps", type=int, default=1, help="1 = strengthened platen caps (default), 0 = none")
+    parser.add_argument("--bottom", choices=("frictionless", "fixed"), default="frictionless",
+                        help="frictionless = bottom u_y = 0 + one u_x anchor (default); fixed = u_x = u_y = 0 on the "
+                             "whole bottom face (CWF then on both components there)")
+    parser.add_argument("--rf-cov", dest="rfCov", type=float, default=None,
+                        help="coefficient of variation of the random strength field (all four strengths); 0 = off")
+    parser.add_argument("--rf-lc", dest="rfLc", type=float, default=None, help="correlation length [mm] (2.5)")
+    parser.add_argument("--rf-seed", dest="rfSeed", type=int, default=None, help="seed of the field (20261002)")
+    parser.add_argument("--htrac", type=float, default=None,
+                        help="horizontal traction on the top face per unit nominal axial strain [MPa]: "
+                             "t_x = htrac * eps (e.g. 20 -> 0.2 MPa at 1 %%)")
     parser.add_argument("--tag", default="", help="suffix for the output file names, so several "
                                                  "mesh sizes can be run side by side")
     args = parser.parse_args()
@@ -1117,7 +1199,9 @@ if __name__ == "__main__":
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
                      ("hres", args.hres), ("As", args.As), ("unload", args.unload),
-                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("nlDduAbs", args.nlDduAbs), ("bcAt", args.bcAt), ("cwf", args.cwf), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent)):
+                     ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("nlDduAbs", args.nlDduAbs), ("bcAt", args.bcAt), ("cwf", args.cwf), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent),
+                     ("caps", args.caps), ("bottom", args.bottom), ("rfCov", args.rfCov), ("rfLc", args.rfLc),
+                     ("rfSeed", args.rfSeed), ("htrac", args.htrac)):
         if val is not None:
             OVERRIDES[key] = val
     if args.strain is not None:
@@ -1167,5 +1251,6 @@ if __name__ == "__main__":
             u=np.array([sn["u"] for sn in r["snapshots"]]),
             **( {"verts": np.array([sn["verts"] for sn in r["snapshots"]])}
                 if r["snapshots"][0]["verts"] is not None else {} ),
+            **( {"rf": r["rf"]} if r.get("rf") is not None else {} ),
         )
         print(f"  wrote snapshots_frame{r['frameUpdate']}{tag}.npz")
