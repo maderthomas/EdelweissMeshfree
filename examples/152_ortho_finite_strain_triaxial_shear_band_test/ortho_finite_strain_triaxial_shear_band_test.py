@@ -421,7 +421,8 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         f"H/l = {HEIGHT / lNonlocal():.1f}, particle = {pName}, frameUpdate = {frameUpdate}, "
         f"softMod = {OVERRIDES.get('softMod', SOFTMOD):g}, "
         f"damageOnset = {OVERRIDES.get('damageOnset', DAMAGE_ONSET):g}, "
-        f"Hres = {OVERRIDES.get('hres', H_RESIDUAL):g}, As = {OVERRIDES.get('As', AS):g}, "
+        f"Hres = {OVERRIDES.get('hres', H_RESIDUAL):g}, As = {OVERRIDES.get('As', AS):g}, Df = {DF:g}, "
+        f"l = {lNonlocal():g} mm, support = {supportRadius:g} mm, "
         f"confining pressure = {confiningPressure} MPa",
         "setup",
     )
