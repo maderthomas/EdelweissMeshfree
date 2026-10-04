@@ -330,7 +330,7 @@ def materialProperties(strengthFactor, frameUpdate):
             math.cos(phi), math.sin(phi), 0.0,          # bedding normal n0
             FCY * strengthFactor, FCU * strengthFactor,
             FBU * strengthFactor, FTU * strengthFactor,
-            DF,
+            OVERRIDES.get("Df", DF),
             AH, BH, CH, DH, OVERRIDES.get("As", AS),
             OVERRIDES.get("softMod", SOFTMOD), OVERRIDES.get("maxDmg", MAXDMG),
             *OVERRIDES.get("weights", (ALPHA, BETA, GAMMA, ZETA, XI, ETA)),
@@ -421,7 +421,7 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
         f"H/l = {HEIGHT / lNonlocal():.1f}, particle = {pName}, frameUpdate = {frameUpdate}, "
         f"softMod = {OVERRIDES.get('softMod', SOFTMOD):g}, "
         f"damageOnset = {OVERRIDES.get('damageOnset', DAMAGE_ONSET):g}, "
-        f"Hres = {OVERRIDES.get('hres', H_RESIDUAL):g}, As = {OVERRIDES.get('As', AS):g}, Df = {DF:g}, "
+        f"Hres = {OVERRIDES.get('hres', H_RESIDUAL):g}, As = {OVERRIDES.get('As', AS):g}, Df = {OVERRIDES.get('Df', DF):g}, "
         f"l = {lNonlocal():g} mm, support = {supportRadius:g} mm, "
         f"confining pressure = {confiningPressure} MPa",
         "setup",
@@ -1122,6 +1122,7 @@ if __name__ == "__main__":
                              "ELASTIC deformation; shows that the elastic part of the frame "
                              "reorientation is recoverable and the plastic part is not "
                              "(0.15 is ample, elastic strains being ~1 %%)")
+    parser.add_argument("--Df", dest="Df", type=float, default=None, help="D_f of the card (default: the card's)")
     parser.add_argument("--As", dest="As", type=float, default=None,
                         help="ductility divisor As of the damage driver: xs = 1 + As(4 sqrt(Rs)-3). "
                              "The calibrated 15 makes xs ~ 16 in compression and damage crawl; "
@@ -1199,7 +1200,7 @@ if __name__ == "__main__":
 
     for key, val in (("softMod", args.softmod), ("maxDmg", args.maxdmg),
                      ("l", args.lnl), ("m", args.m), ("damageOnset", args.onset),
-                     ("hres", args.hres), ("As", args.As), ("unload", args.unload),
+                     ("hres", args.hres), ("As", args.As), ("Df", args.Df), ("unload", args.unload),
                      ("dduAbs", args.dduAbs), ("nlFluxAbs", args.nlFluxAbs), ("nlDduAbs", args.nlDduAbs), ("bcAt", args.bcAt), ("cwf", args.cwf), ("fluxAbs", args.fluxAbs), ("tangent", args.tangent),
                      ("caps", args.caps), ("bottom", args.bottom), ("rfCov", args.rfCov), ("rfLc", args.rfLc),
                      ("rfSeed", args.rfSeed), ("htrac", args.htrac)):
