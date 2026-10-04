@@ -292,7 +292,7 @@ NIANDOU = dict(
     NU12=0.2, NU13=0.2, NU23=0.25,
     G12=4000.0, G13=4000.0, G23=18000.0 / (2.0 * 1.25),
     FCU=42.54, FCY=22.25, FTU=9.1608, FBU=43.8059,  # ftu/fbu derived: e = 0.51, m0* = 4.487
-    DF=0.85, AH=0.022, BH=0.01, CH=1.0, DH=1e-6, AS=15.0,
+    DF=0.90, AH=0.022, BH=0.01, CH=1.0, DH=1e-6, AS=4.0,  # D_f, A_s: calibrated post-peak (were 0.85, 15)
     SOFTMOD=4.75e-4,                  # eps_f*
     L_NONLOCAL=5.0, WEIGHT_M=1.05,
     ALPHA=1.0, BETA=1.0, GAMMA=1.0, ZETA=1.0, XI=1.0, ETA=1.0,
