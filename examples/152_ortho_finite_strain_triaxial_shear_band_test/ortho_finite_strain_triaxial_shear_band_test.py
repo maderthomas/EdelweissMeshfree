@@ -706,16 +706,22 @@ def run_sim(frameUpdate=1, coarse=False, ensightName=None, spacing=None,
     # -0.19 MPa of an intended -5.0 at the point the run stopped, i.e. essentially unconfined.
     if distributedLoads:
         journal.message(f"STEP 1 -- building up {confiningPressure} MPa of confinement", "step")
+        # The platens are held during the confinement with the SAME conditions as in step 2 (top u_y = 0,
+        # u_x free; base frictionless + anchor, or with --bottom fixed fully held), so that the pressure acts on
+        # the two lateral faces only.  With --bottom fixed the CWF correction on the base acts on both
+        # components, which is only consistent if both are prescribed there in this step as well.
+        if bottomFixed:
+            confBCs = [bc("botXY", bottomParticles, {0: 0.0, 1: 0.0}, **botKw)]
+        else:
+            confBCs = [bc("botY", bottomParticles, {1: 0.0}, **botKw), bc("anchorX", anchor, {0: 0.0})]
         try:
             nonlinearSolver.solveStep(
                 AdaptiveTimeStepper(theModel.time, 1.0, 0.2, 0.5, 1e-3, 100, journal),
                 linearSolver, theModel, fieldOutputController,
                 outputManagers=outputManagers,
                 particleManagers=[theParticleManager],
-                constraints=[
-                    bc("botY", bottomParticles, {1: 0.0}, **botKw),
+                constraints=confBCs + [
                     bc("topY", list(sets["rectangular_grid_top"]), {1: 0.0}, **topKw),
-                    bc("anchorX", anchor, {0: 0.0}),
                 ],
                 particleDistributedLoads=distributedLoads + cwfLoads,
                 userIterationOptions=iterationOptions,
