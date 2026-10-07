@@ -66,7 +66,9 @@ USAGE
     python ortho_finite_strain_patch_test.py --nx 12          # a finer patch
     python ortho_finite_strain_patch_test.py --refine         # the spacing study
     python ortho_finite_strain_patch_test.py --no-vci         # the VCI correction off
-Run under BASE python (/home/tom/miniforge3/bin/python).
+    python ortho_finite_strain_patch_test.py --card niandou --all --figure   # the paper's card: the paper figure
+    python ortho_finite_strain_patch_test.py --card niandou --numbers        # the other numbers Sec. 6.1 quotes
+Run in the edelweiss_next env (/home/tom/miniforge3/envs/edelweiss_next/bin/python).
 """
 
 import argparse
@@ -161,6 +163,42 @@ L_NONLOCAL, WEIGHT_M = 1.25, 1.05
 DAMAGE_ONSET, H_RESIDUAL = 0.95, 0.02
 
 LENGTH = 10.0  # the patch is LENGTH x LENGTH
+
+# THE TOURNEMIRE CARD (--card niandou).  The card of main.tex Table fw:tab:niandoucard, i.e. the one every
+# structural study of the paper runs with, and the strict model of the paper (damage onset at alphaP = 1, no
+# residual hardening): E1 = 7000, E2 = E3 = 18000, nu12 = nu13 = 0.2, nu23 = 0.25, G12 = G13 = 4000,
+# G23 = 7200 MPa; fcu = 42.54, fcy = 22.25, fbu = 43.8059, ftu = 9.1608 MPa; D_f = 0.90; Ah = 0.022,
+# Bh = 0.01, Ch = 1, Dh = 1e-6; A_s = 4, eps_f* = 4.75e-4, maxDmg 0.9999; l_d = 5 mm, m = 1.05; calibrated
+# Kelvin weights (1, 0.90, 0.90, 1.25, 1.25, 0.90) in the Voigt order (11, 22, 33, 12, 13, 23); convected
+# frame.  The default ('generic') is the card above, kept for the record.
+CARDS = {
+    "niandou": dict(
+        E1=7000.0, E2=18000.0, E3=18000.0, NU12=0.2, NU13=0.2, NU23=0.25,
+        G12=4000.0, G13=4000.0, G23=7200.0,
+        FCU=42.54 * STRENGTH_SCALE, FCY=22.25 * STRENGTH_SCALE,
+        FBU=43.8059 * STRENGTH_SCALE, FTU=9.1608 * STRENGTH_SCALE,
+        AH=0.022, BH=0.01, CH=1.0, DH=1e-6, AS=4.0, DF=0.90,
+        SOFTMOD=4.75e-4, MAXDMG=0.9999,
+        ALPHA=1.0, BETA_W=0.90, GAMMA_W=0.90, ZETA=1.25, XI=1.25, ETA=0.90,
+        L_NONLOCAL=5.0, WEIGHT_M=1.05, DAMAGE_ONSET=1.0, H_RESIDUAL=0.0,
+    ),
+}
+CARD = "generic"
+
+
+def applyCard(name):
+    """Switch the module-level card ('generic' = the default above, 'niandou' = the paper's Tournemire card)."""
+    global CARD
+    CARD = name
+    if name == "generic":
+        return
+    g = globals()
+    for k, v in CARDS[name].items():
+        g[k] = v
+    _POTENTIAL.clear()
+    # the plastic field of the generic card, -0.1 x the affine one, is far past the peak on this stiffer card;
+    # PLASTIC_SCALE[name] is the factor on the affine field that keeps it in the hardening branch
+    EXTRA_CASES["plastic"] = (PLASTIC_SCALE[name] * EXTRA_CASES["affine"][0], EXTRA_CASES["affine"][1])
 
 
 def materialProperties(beddingDeg, frameUpdate=1, strengthScale=None):
@@ -259,6 +297,11 @@ EXTRA_CASES = {
     # be checked with the return map and the gradient-damage coupling in the loop.
     "plastic": (np.array([[-0.010, -0.020], [-0.015, -0.010]]), np.array([0.10, 0.05])),
 }
+
+
+# the factor on the affine field of the yielding run, per card.  On the Tournemire card -0.1 takes alphaP to 1.05 at
+# beta = 0 and 90 deg, past the peak; -0.08 keeps every orientation in the hardening branch.
+PLASTIC_SCALE = {"generic": -0.1, "niandou": -0.08}
 
 
 def caseField(case):
@@ -1334,6 +1377,54 @@ def makeAffineFigure(results, out=None, nX=8, perturb=0.4, plastic=None):
 # =============================================================================================
 
 
+def paperNumbers(nX=8, perturb=0.4, support=2.5, bedding=30.0):
+    """Every auxiliary number of Sec. fw:sec:patch that the --figure run does not print."""
+    j = Journal()
+    A, cOff = caseField("affine")
+    print(f"  affine field: det F = {np.linalg.det(np.eye(2) + A):.4f}")
+    model = potential()
+    psiI = model.energy(np.eye(3)) if model is not None else float("nan")
+    print("\n  STORED ENERGY AND STRESS OF THE AFFINE FIELD (strengths lifted), over the sweep")
+    for b in BEDDINGS:
+        r = run_patch(float(b), case="affine", nX=nX, perturb=perturb, support=support, journal=j)
+        print(f"    beta {b:3d}: Psi_ex {r['psiEx']:.3f} MPa (unnormalised {r['psiEx'] + psiI:.1f}, "
+              f"Psi(I) = {psiI:.1f}, ratio {(r['psiEx'] + psiI) / r['psiEx']:.1f})  max|stress| "
+              f"{r['stressMax']:.1f} MPa  alphaP max {r['alphaPMax']:.1e}  domain gap {r['domainGap']:.2e} mm  "
+              f"err(F) per component {np.array2string(r['errFComp'].reshape(-1), precision=1)}")
+    print("\n  THE AFFINE FIELD AT REAL STRENGTHS, a fiftieth of its amplitude (tension)")
+    for b in (0.0, bedding, 45.0, 90.0):
+        r = run_patch(b, case="affine", nX=nX, perturb=perturb, support=support, strengthScale=1.0,
+                      amplitude=AMPLITUDE / 50.0, journal=j)
+        print(f"    beta {b:4.0f}: failed {r['failed']}  alphaP max {r['alphaPMax']:.4g}  max|stress| "
+              f"{r['stressMax']:.3f} MPa")
+    print(f"\n  AMPLITUDE, beta = {bedding:.0f}: the relative errors at 1/50 and at full amplitude (strengths lifted)")
+    for fac in (1.0 / 50.0, 1.0):
+        r = run_patch(bedding, case="affine", nX=nX, perturb=perturb, support=support,
+                      amplitude=AMPLITUDE * fac, journal=j)
+        print(f"    x{fac:.3f}: err(u) {r['errU']:.2e}  err(F) {r['errF']:.2e}  err(E) {r['errE']:.2e}")
+    print(f"\n  SOLVER TOLERANCE, beta = {bedding:.0f}, affine")
+    for tol in (1e-4, 1e-12):
+        r = run_patch(bedding, case="affine", nX=nX, perturb=perturb, support=support, tolerance=tol, journal=j)
+        print(f"    tol {tol:.0e}: err(u) {r['errU']:.2e}  err(F) {r['errF']:.2e}")
+    print(f"\n  VCI OFF, beta = {bedding:.0f}, affine")
+    for vci in (True, False):
+        r = run_patch(bedding, case="affine", nX=nX, perturb=perturb, support=support, vci=vci, journal=j)
+        print(f"    vci {vci}: err(u) {r['errU']:.4e}  err(F) {r['errF']:.4e}")
+    # s_hat = 1.5 is not in the list: too few neighbours for the moment matrix, and in this build the run then
+    # aborts the interpreter ("malloc(): unaligned tcache chunk detected") instead of raising
+    print("\n  KERNEL SUPPORT, unperturbed lattice, affine")
+    for sup in (2.0, 2.5, 3.0):
+        try:
+            r = run_patch(bedding, case="affine", nX=nX, perturb=0.0, support=sup, journal=j)
+            print(f"    s_hat {sup}: failed {r['failed']}  err(u) {r['errU']:.2e}  err(F) {r['errF']:.2e}")
+        except Exception as e:      # too few neighbours: the moment matrix is singular
+            print(f"    s_hat {sup}: {type(e).__name__}: {e}")
+    print(f"\n  BENDING COMPANION, kappa = {BENDING_KAPPA}, beta = {bedding:.0f}")
+    r = run_patch(bedding, case="affine", nX=nX, perturb=perturb, support=support, fieldFun=bendingDisplacement,
+                  journal=j)
+    print(f"    domain gap {1e3 * r['domainGap']:.1f} um = {100 * r['domainGap'] / r['h']:.1f} % of h_p")
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--nx", type=int, default=8)
@@ -1351,10 +1442,21 @@ def main():
     ap.add_argument("--refine", action="store_true")
     ap.add_argument("--figure", action="store_true",
                     help="write fig_patch_affine.pdf, the paper figure")
+    ap.add_argument("--card", default="generic", choices=("generic", "niandou"),
+                    help="generic = the card of this file (default); niandou = the paper's Tournemire card, "
+                         "Table fw:tab:niandoucard, strict model -- the one fig_patch_affine.pdf is made with")
+    ap.add_argument("--numbers", action="store_true",
+                    help="the auxiliary numbers Sec. fw:sec:patch quotes (amplitude, tolerance, support, VCI, "
+                         "domain gap, bending gap, the tensile run at real strengths)")
     ap.add_argument("--affine", action="store_true",
                     help="the affine study u = c + A X, with the energy error, and "
                          "fig_patch_affine.pdf")
     args = ap.parse_args()
+    applyCard(args.card)
+    print(f"\n  CARD: {args.card}")
+    if args.numbers:
+        paperNumbers(nX=args.nx, perturb=args.perturb, support=args.support)
+        return
 
     cases = (args.case,) if args.case else tuple(LOAD_CASES)
     beddings = (args.bedding,) if args.bedding is not None else tuple(BEDDINGS)

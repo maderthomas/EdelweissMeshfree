@@ -295,7 +295,10 @@ NIANDOU = dict(
     DF=0.90, AH=0.022, BH=0.01, CH=1.0, DH=1e-6, AS=4.0,  # D_f, A_s: calibrated post-peak (were 0.85, 15)
     SOFTMOD=4.75e-4,                  # eps_f*
     L_NONLOCAL=5.0, WEIGHT_M=1.05,
-    ALPHA=1.0, BETA=1.0, GAMMA=1.0, ZETA=1.0, XI=1.0, ETA=1.0,
+    # calibrated Kelvin weights (main.tex eq. fw:eq:weightseta), Marmot order (11, 22, 33, 12, 13, 23) =
+    # (alpha, beta, gamma, zeta, xi, eta) with e1 the bedding normal; were 1 (isotropic map).  The paper runs
+    # passed them explicitly with --weights 1.0,0.90,0.90,1.25,1.25,0.90.
+    ALPHA=1.0, BETA=0.90, GAMMA=0.90, ZETA=1.25, XI=1.25, ETA=0.90,
     BEDDING_PHI_DEG=45.0,             # beta: inclination of the stratification planes
     AXIAL_STRAIN=0.04,                # 3 mm of 75 mm
     # the model of main.tex exactly: damage starts once hardening is complete (alphaP >= 1) and
