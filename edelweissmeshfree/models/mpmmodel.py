@@ -327,6 +327,10 @@ class MPMModel(FEModel):
                 materialPoint.prepareYourself(self.time, 0.0)
             for mpmManager in self.mpmManagers:
                 managersChanged |= mpmManager.updateConnectivity()
+            # multi-point constraints that depend on the assignment (aggregation: projection points of the cells)
+            for mpc in self.multiPointConstraints.values():
+                if hasattr(mpc, "updateConnectivity"):
+                    mpc.updateConnectivity()
 
         if self.particleManagers:
             for particle in self.particles.values():
