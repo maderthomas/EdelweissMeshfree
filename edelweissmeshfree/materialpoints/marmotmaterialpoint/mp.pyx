@@ -84,6 +84,7 @@ cdef class MarmotMaterialPointWrapper:
             raise NotImplementedError("Failed to create instance of MarmotMaterialPoint {:}: {:}".format(materialPointType, e)) from e
 
         self._number                = materialPointNumber
+        self._initialVolume         = volume
         self._materialPointType     = materialPointType
         self._ensightType           = self._marmotMaterialPoint.getMaterialPointShape().decode('utf-8')
         self._nVertices             = self._marmotMaterialPoint.getNumberOfVertices()
@@ -102,6 +103,11 @@ cdef class MarmotMaterialPointWrapper:
     @property
     def number(self):
         return self._number
+
+    @property
+    def initialVolume(self) -> float:
+        """The volume the material point was created with (its volume in the reference configuration)."""
+        return self._initialVolume
 
     @property
     def assignedCells(self) -> set:

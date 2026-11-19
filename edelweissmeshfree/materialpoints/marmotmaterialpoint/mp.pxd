@@ -105,6 +105,7 @@ cdef class MarmotMaterialPointWrapper:
     cdef public double[::1] _stateVarsTemp
     cdef int _nStateVars
     cdef int _nDim
+    cdef double _initialVolume
 
     cdef public list _assignedCells
 
