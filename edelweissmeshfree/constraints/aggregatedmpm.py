@@ -104,6 +104,9 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
           one volume change per aggregate, the volume-weighted mean over all its material points, with the exact
           tangent across its cells); every active cell outside an aggregate is a patch of its own. Only cells that
           support it (``hasPatchProjection``) take part.
+        - ``"cellPatch"``: the patch projection with every active cell a patch of its own, also inside the
+          aggregates (one volume change per cell, the volume-weighted mean over its material points; a study variant
+          that imposes one constraint per cell instead of one per aggregate).
     """
 
     slavesYieldToDirichlet = True
@@ -128,9 +131,11 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         self._aggregationCache = None
         if projectionMode is None:
             projectionMode = "commonPoint" if commonProjectionPoint else "cell"
-        if projectionMode not in ("commonPoint", "cell", "patch"):
-            raise ValueError("projectionMode must be 'commonPoint', 'cell' or 'patch', not {:}".format(projectionMode))
-        #: The cell-level projection, ``"commonPoint"``, ``"cell"`` or ``"patch"``.
+        if projectionMode not in ("commonPoint", "cell", "patch", "cellPatch"):
+            raise ValueError(
+                "projectionMode must be 'commonPoint', 'cell', 'patch' or 'cellPatch', not {:}".format(projectionMode)
+            )
+        #: The cell-level projection, ``"commonPoint"``, ``"cell"``, ``"patch"`` or ``"cellPatch"``.
         self.projectionMode = projectionMode
         self._patches = None
         #: The aggregation of the last numbering, :class:`~edelweissmeshfree.numerics.aggregation.CellAggregation`.
@@ -236,7 +241,7 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         activeCells = self._model.activeCellsOf(self._model.mpmManagers)
         activeCellNumbers = tuple(cell.cellNumber for cell in activeCells)
         aggregation = self._aggregationOf(activeCells, activeCellNumbers)
-        if self.projectionMode == "patch":
+        if self.projectionMode in ("patch", "cellPatch"):
             self._updatePatches(aggregation, activeCells, activeCellNumbers)
             return
         if not aggregation.connectedInteriorCell:
@@ -267,8 +272,9 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         if self._patches is not None and self._patches[0] == activeCellNumbers:
             return
         groups = {}
-        for boundaryCell, interiorCell in aggregation.connectedInteriorCell.items():
-            groups.setdefault(interiorCell, [interiorCell]).append(boundaryCell)
+        if self.projectionMode == "patch":
+            for boundaryCell, interiorCell in aggregation.connectedInteriorCell.items():
+                groups.setdefault(interiorCell, [interiorCell]).append(boundaryCell)
         grouped = {c for g in groups.values() for c in g}
         groupList = list(groups.values()) + [[c] for c in activeCellNumbers if c not in grouped]
         cellByNumber = {cell.cellNumber: cell for cell in activeCells}
@@ -290,7 +296,7 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
             The patches of the current active cells, or none.
         """
 
-        if self.projectionMode != "patch" or self._patches is None:
+        if self.projectionMode not in ("patch", "cellPatch") or self._patches is None:
             return []
         return list(self._patches[1])
 

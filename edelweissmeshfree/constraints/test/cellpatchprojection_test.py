@@ -49,7 +49,7 @@ NEOHOOKE = {"material": "COMPRESSIBLENEOHOOKE", "properties": np.array([833.0, 3
 J2 = {"material": "FINITESTRAINJ2PLASTICITY", "properties": np.array([833.0, 385.0, 6.0, 6.0, 0.0, 0.0, 1, 1.0])}
 
 
-def _model(material):
+def _model(material, projectionMode="patch"):
     """A 5 x 4 grid of unit FBar cells; material points, off the cell centres, fill a staircase domain, so that
     there are interior cells, aggregated boundary cells and patches of several cells."""
 
@@ -75,7 +75,7 @@ def _model(material):
     model.mpmManagers.append(
         SmartMaterialPointManager(model.cellSets["all"], model.materialPointSets["all"], 2, options={"KDTreeLevels": 2})
     )
-    agmpm = AggregatedMaterialPointMethod("agmpm", model, journal, projectionMode="patch")
+    agmpm = AggregatedMaterialPointMethod("agmpm", model, journal, projectionMode=projectionMode)
     model.multiPointConstraints["agmpm"] = agmpm
     model.updateConnectivity()
     return model, model.buildDiscreteSystem()
@@ -116,6 +116,15 @@ def test_patches_are_the_aggregates():
     assert len(patches) == len(aggregation.activeCells) - len(aggregation.connectedInteriorCell)
     assert sum(len(p.cells) for p in patches) == len(aggregation.activeCells)
     assert any(len(p.cells) > 2 for p in patches)
+
+
+def test_cell_patches_are_the_cells():
+    """projectionMode="cellPatch": every active cell is a patch of its own, also inside the aggregates."""
+    model, system = _model(NEOHOOKE, projectionMode="cellPatch")
+    patches = system.cellPatchProjections
+    assert len(patches) == len(system.activeCells)
+    assert all(len(p.cells) == 1 for p in patches)
+    assert len(aggregationOfModel(model, system.activeCells).connectedInteriorCell) > 0  # there are aggregates
 
 
 @pytest.mark.parametrize("material, scale", [(NEOHOOKE, 0.03), (J2, 0.01)], ids=["neohooke", "j2"])
