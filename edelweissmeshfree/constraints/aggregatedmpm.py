@@ -104,6 +104,14 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
           one volume change per aggregate, the volume-weighted mean over all its material points, with the exact
           tangent across its cells); every active cell outside an aggregate is a patch of its own. Only cells that
           support it (``hasPatchProjection``) take part.
+        - ``"nodal"``: a projection through the nodes of the full grid
+          (:class:`~edelweissmeshfree.constraints.nodalprojection.NodalProjection`, e.g. the nodal F-bar: the volume
+          change of every material point interpolated from the nodal averages) on the full grid, before the
+          aggregation reduces the system; the values of the exterior nodes are extended from those of the interior
+          nodes with the weights of the aggregation (``nodalExtension``), so that there is one volumetric constraint
+          per independent node. Only cells that support it (``hasMaterialPointProjection``) take part.
+    nodalExtension
+        See ``projectionMode="nodal"``; default True.
     """
 
     slavesYieldToDirichlet = True
@@ -116,6 +124,7 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         cells=None,
         commonProjectionPoint: bool = True,
         projectionMode: str = None,
+        nodalExtension: bool = True,
     ):
         self._name = name
         self._model = model
@@ -128,11 +137,22 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         self._aggregationCache = None
         if projectionMode is None:
             projectionMode = "commonPoint" if commonProjectionPoint else "cell"
-        if projectionMode not in ("commonPoint", "cell", "patch"):
-            raise ValueError("projectionMode must be 'commonPoint', 'cell' or 'patch', not {:}".format(projectionMode))
+        if projectionMode not in ("commonPoint", "cell", "patch", "nodal"):
+            raise ValueError(
+                "projectionMode must be 'commonPoint', 'cell', 'patch' or 'nodal', not {:}".format(projectionMode)
+            )
         #: The cell-level projection, ``"commonPoint"``, ``"cell"`` or ``"patch"``.
         self.projectionMode = projectionMode
         self._patches = None
+        self._nodalProjection = None
+        #: nodal projection: the nodal values of the exterior nodes are extended from the interior ones (as the
+        #: displacements); False projects them like every other node (one volumetric constraint per node of the full
+        #: grid, which locks with the reduced displacement space).
+        self.nodalExtension = nodalExtension
+        if projectionMode == "nodal":
+            from edelweissmeshfree.constraints.nodalprojection import NodalProjection
+
+            self._nodalProjection = NodalProjection(name + " nodal", model, journal)
         #: The aggregation of the last numbering, :class:`~edelweissmeshfree.numerics.aggregation.CellAggregation`.
         self.aggregation = None
 
@@ -236,6 +256,10 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         activeCells = self._model.activeCellsOf(self._model.mpmManagers)
         activeCellNumbers = tuple(cell.cellNumber for cell in activeCells)
         aggregation = self._aggregationOf(activeCells, activeCellNumbers)
+        if self.projectionMode == "nodal":
+            extension = {label: weights for label, (_, weights) in aggregation.extension.items()}
+            self._nodalProjection.updateConnectivity(activeCells, extension if self.nodalExtension else None)
+            return
         if self.projectionMode == "patch":
             self._updatePatches(aggregation, activeCells, activeCellNumbers)
             return
@@ -282,7 +306,7 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
 
     def couplingEntities(self) -> list:
         """The entities the aggregation adds to the discrete system: the patches of the patch projection
-        (``projectionMode="patch"``), see :meth:`~edelweissmeshfree.models.mpmmodel.MPMModel.activeConstraints`.
+        (``projectionMode="patch"``) or the nodes of the nodal projection (``"nodal"``), see :meth:`~edelweissmeshfree.models.mpmmodel.MPMModel.activeConstraints`.
 
         Returns
         -------
@@ -290,6 +314,8 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
             The patches of the current active cells, or none.
         """
 
+        if self.projectionMode == "nodal":
+            return self._nodalProjection.couplingEntities()
         if self.projectionMode != "patch" or self._patches is None:
             return []
         return list(self._patches[1])

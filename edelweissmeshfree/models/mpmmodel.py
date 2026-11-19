@@ -89,6 +89,11 @@ class MPMModel(FEModel):
         #: The variationally consistent integration managers, which correct the particles' test functions after every
         #: update of the connectivity, see :meth:`updateConnectivity`.
         self.vciManagers = []
+        #: Projections over the cells of the active domain that are not tied to a multi-point constraint, e.g. the
+        #: nodal F-bar (:class:`~edelweissmeshfree.constraints.nodalprojection.NodalProjection`): they follow the
+        #: assignment of the material points (``updateConnectivity``) and add their entities to the discrete system
+        #: (``couplingEntities``).
+        self.cellProjections = {}
 
         super().__init__(dimension)
 
@@ -331,6 +336,8 @@ class MPMModel(FEModel):
             for mpc in self.multiPointConstraints.values():
                 if hasattr(mpc, "updateConnectivity"):
                     mpc.updateConnectivity()
+            for projection in self.cellProjections.values():
+                projection.updateConnectivity()
 
         if self.particleManagers:
             for particle in self.particles.values():
@@ -425,6 +432,8 @@ class MPMModel(FEModel):
         for mpc in self.multiPointConstraints.values():
             if hasattr(mpc, "couplingEntities"):
                 constraints += mpc.couplingEntities()
+        for projection in self.cellProjections.values():
+            constraints += projection.couplingEntities()
         return constraints
 
     @staticmethod
