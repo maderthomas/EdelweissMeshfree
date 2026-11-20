@@ -113,8 +113,17 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
           aggregation reduces the system; the values of the exterior nodes are extended from those of the interior
           nodes with the weights of the aggregation (``nodalExtension``), so that there is one volumetric constraint
           per independent node. Only cells that support it (``hasMaterialPointProjection``) take part.
+        - ``"spline"``: the projection onto the B-spline space of degree p - 1 of a B-spline grid
+          (:class:`~edelweissmeshfree.constraints.splineprojection.SplineProjection`, the B-bar/F-bar projection of
+          Elguedj et al. 2008 with the material points as quadrature points), ``splineProjection`` = ``"global"`` (L2),
+          ``"local"`` or ``"lumped"``; with ``splineExtension`` the projection space is aggregated on the same
+          aggregates (extended B-splines of degree p - 1 / aggregate-wise local projections).
     nodalExtension
         See ``projectionMode="nodal"``; default True.
+    splineProjection
+        See ``projectionMode="spline"``; default ``"global"``.
+    splineExtension
+        See ``projectionMode="spline"``; default True.
     """
 
     slavesYieldToDirichlet = True
@@ -128,6 +137,8 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         commonProjectionPoint: bool = True,
         projectionMode: str = None,
         nodalExtension: bool = True,
+        splineProjection: str = "global",
+        splineExtension: bool = True,
     ):
         self._name = name
         self._model = model
@@ -140,11 +151,10 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
         self._aggregationCache = None
         if projectionMode is None:
             projectionMode = "commonPoint" if commonProjectionPoint else "cell"
-        if projectionMode not in ("commonPoint", "cell", "patch", "cellPatch", "nodal"):
+        if projectionMode not in ("commonPoint", "cell", "patch", "cellPatch", "nodal", "spline"):
             raise ValueError(
-                "projectionMode must be 'commonPoint', 'cell', 'patch', 'cellPatch' or 'nodal', not {:}".format(
-                    projectionMode
-                )
+                "projectionMode must be 'commonPoint', 'cell', 'patch', 'cellPatch', 'nodal' or 'spline', "
+                "not {:}".format(projectionMode)
             )
         #: The cell-level projection, ``"commonPoint"``, ``"cell"``, ``"patch"``, ``"cellPatch"`` or ``"nodal"``.
         self.projectionMode = projectionMode
@@ -158,6 +168,13 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
             from edelweissmeshfree.constraints.nodalprojection import NodalProjection
 
             self._nodalProjection = NodalProjection(name + " nodal", model, journal)
+        #: spline projection: the projection space is aggregated on the same aggregates
+        self.splineExtension = splineExtension
+        self._splineProjection = None
+        if projectionMode == "spline":
+            from edelweissmeshfree.constraints.splineprojection import SplineProjection
+
+            self._splineProjection = SplineProjection(name + " spline", model, journal, mode=splineProjection)
         #: The aggregation of the last numbering, :class:`~edelweissmeshfree.numerics.aggregation.CellAggregation`.
         self.aggregation = None
 
@@ -265,6 +282,9 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
             extension = {label: weights for label, (_, weights) in aggregation.extension.items()}
             self._nodalProjection.updateConnectivity(activeCells, extension if self.nodalExtension else None)
             return
+        if self.projectionMode == "spline":
+            self._splineProjection.updateConnectivity(activeCells, aggregation if self.splineExtension else None)
+            return
         if self.projectionMode in ("patch", "cellPatch"):
             self._updatePatches(aggregation, activeCells, activeCellNumbers)
             return
@@ -322,6 +342,8 @@ class AggregatedMaterialPointMethod(MultiPointConstraintBase):
 
         if self.projectionMode == "nodal":
             return self._nodalProjection.couplingEntities()
+        if self.projectionMode == "spline":
+            return self._splineProjection.couplingEntities()
         if self.projectionMode not in ("patch", "cellPatch") or self._patches is None:
             return []
         return list(self._patches[1])
