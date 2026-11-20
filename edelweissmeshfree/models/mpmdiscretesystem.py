@@ -122,11 +122,18 @@ class MPMDiscreteSystem(DiscreteSystem):
 
     @property
     def cellPatchProjections(self) -> list:
-        """The constraints of the discrete system that project over patches of cells
-        (:class:`~edelweissmeshfree.constraints.cellpatchprojection.CellPatchProjection`), evaluated before the cells
-        interpolate, see :meth:`updateMaterialPoints`."""
+        """The projections over patches of cells of the constraints of the discrete system
+        (:class:`~edelweissmeshfree.constraints.cellpatchprojection.CellPatchProjection`, or the
+        :class:`~edelweissmeshfree.constraints.nodalprojection.NodalProjection` the entities of a nodal projection
+        share as their ``projector``, once), evaluated before the cells interpolate, see :meth:`updateMaterialPoints`.
+        """
 
-        return [c for c in self.constraints if getattr(c, "projectsOverCells", False)]
+        projectors = {}
+        for c in self.constraints:
+            if getattr(c, "projectsOverCells", False):
+                projector = getattr(c, "projector", c)
+                projectors.setdefault(id(projector), projector)
+        return list(projectors.values())
 
     @property
     def particles(self) -> list:

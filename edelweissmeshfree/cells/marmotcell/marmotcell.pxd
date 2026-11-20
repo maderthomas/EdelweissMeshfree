@@ -90,6 +90,16 @@ cdef extern from "Marmot/MarmotCell.h":
 
         void getProjectionSensitivity(double* dR_dValue) except +
 
+        bint hasMaterialPointProjection()
+
+        void computeMaterialPointProjectionContributions(const double* Q, double* values, double* weights, double* dValues_dQ) except +
+
+        void getMaterialPointProjectionBasis(double* N) except +
+
+        void setMaterialPointProjectedValues(const double* values) except +
+
+        void getMaterialPointProjectionSensitivities(double* dR_dValues) except +
+
         void computeMaterialPointKernels(   const double* dUc,
                                             double* Pc,
                                             double* Kc,

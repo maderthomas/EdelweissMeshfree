@@ -251,6 +251,40 @@ cdef class MarmotCellWrapper:
         """The derivative of the residual contributions of the cell w.r.t. the patch value (cell dof order)."""
         self._marmotCell.getProjectionSensitivity(&dR_dValue[0])
 
+    @property
+    def hasMaterialPointProjection(self) -> bool:
+        """Whether the cell supports a projection with one value per material point (e.g. nodal F-bar), see
+        :class:`~edelweissmeshfree.constraints.nodalprojection.NodalProjection`."""
+        return self._marmotCell.hasMaterialPointProjection()
+
+    def computeMaterialPointProjectionContributions(self, double[::1] dUc, double[::1] values, double[::1] weights,
+                                                    double[::1] dValues_dQ):
+        """Pass 1 of the projection per material point: the values, weights and derivatives (material point major, cell
+        dof order) of the assigned material points at the increment ``dUc``; changes no material point. Does nothing
+        without material points."""
+        if values.shape[0] == 0:
+            return
+        self._marmotCell.computeMaterialPointProjectionContributions(&dUc[0], &values[0], &weights[0], &dValues_dQ[0])
+
+    def getMaterialPointProjectionBasis(self, double[::1] N):
+        """The cell basis at the assigned material points (material point major), as the cell uses it."""
+        if N.shape[0] == 0:
+            return
+        self._marmotCell.getMaterialPointProjectionBasis(&N[0])
+
+    def setMaterialPointProjectedValues(self, double[::1] values):
+        """Pass 2 of the projection per material point: the values the next evaluations use."""
+        if values.shape[0] == 0:
+            return
+        self._marmotCell.setMaterialPointProjectedValues(&values[0])
+
+    def getMaterialPointProjectionSensitivities(self, double[::1] dR_dValues):
+        """The derivatives of the residual contributions of the cell w.r.t. the projected values (material point
+        major, cell dof order)."""
+        if dR_dValues.shape[0] == 0:
+            return
+        self._marmotCell.getMaterialPointProjectionSensitivities(&dR_dValues[0])
+
     def isCoordinateInCell(self, coordinate: np.ndarray) -> bool:
         cdef double[::1] coords = coordinate
         return self._marmotCell.isCoordinateInCell(&coords[0])
